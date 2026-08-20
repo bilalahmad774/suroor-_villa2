@@ -69,6 +69,16 @@ export default function AdminDashboardPage() {
   const [newRuleName, setNewRuleName] = useState('');
   const [newRuleMultiplier, setNewRuleMultiplier] = useState('1.2');
 
+  // Centralized Base Rates & Villa Pricing
+  const [pricingConfig, setPricingConfig] = useState({
+    entireVillaPrice: 30000,
+    room1Price: 15000,
+    room2Price: 15000,
+    room3Price: 15000,
+    entireVillaDiscountPercentage: 0,
+  });
+  const [savingPricing, setSavingPricing] = useState(false);
+
   // Coupons
   const [coupons, setCoupons] = useState<any[]>([]);
   const [newCouponCode, setNewCouponCode] = useState('');
@@ -80,6 +90,31 @@ export default function AdminDashboardPage() {
   const [adminEmail, setAdminEmail] = useState('admin@suroorvilla.in');
   const [adminPassword, setAdminPassword] = useState('Admin@123456');
   const [loggingIn, setLoggingIn] = useState(false);
+
+  // Razorpay Diagnostics
+  const [razorpayDiag, setRazorpayDiag] = useState<any>(null);
+  const [runningDiag, setRunningDiag] = useState(false);
+
+  const runRazorpayDiagnostics = async () => {
+    setRunningDiag(true);
+    try {
+      const res = await fetch('/api/admin/razorpay-diagnostics', {
+        headers: getAuthHeaders(),
+      });
+      const data = await res.json();
+      if (data.success && data.diagnostics) {
+        setRazorpayDiag(data.diagnostics);
+        toast.success('Razorpay account diagnostic completed successfully');
+      } else {
+        toast.error(data.error || 'Diagnostic returned errors');
+        if (data.diagnostics) setRazorpayDiag(data.diagnostics);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to run diagnostic');
+    } finally {
+      setRunningDiag(false);
+    }
+  };
 
   const handleAdminLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -176,12 +211,44 @@ export default function AdminDashboardPage() {
     }
   }, []);
 
+  const fetchPricingConfig = useCallback(async () => {
+    try {
+      const res = await fetch('/api/pricing');
+      const data = await res.json();
+      if (data.success && data.pricing) {
+        setPricingConfig(data.pricing);
+      }
+    } catch {
+      // fallback
+    }
+  }, []);
+
   const reloadAll = useCallback(() => {
     setLoading(true);
-    Promise.all([fetchOverview(), fetchBookings(), fetchRules(), fetchCoupons(), fetchAuditLogs()]).finally(() =>
+    Promise.all([fetchOverview(), fetchBookings(), fetchRules(), fetchCoupons(), fetchAuditLogs(), fetchPricingConfig()]).finally(() =>
       setLoading(false)
     );
-  }, [fetchOverview, fetchBookings, fetchRules, fetchCoupons, fetchAuditLogs]);
+  }, [fetchOverview, fetchBookings, fetchRules, fetchCoupons, fetchAuditLogs, fetchPricingConfig]);
+
+  const handleSavePricingConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingPricing(true);
+    try {
+      const res = await fetch('/api/admin/pricing', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(pricingConfig),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'Failed to update pricing');
+      toast.success('Room & Entire Villa rates updated successfully!');
+      fetchPricingConfig();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to save pricing configuration.');
+    } finally {
+      setSavingPricing(false);
+    }
+  };
 
   useEffect(() => {
     reloadAll();
@@ -602,11 +669,111 @@ export default function AdminDashboardPage() {
           {activeTab === 'pricing' && (
             <div className="space-y-6">
               <div>
-                <h2 className="font-serif text-2xl font-bold text-foreground">Deterministic Pricing Rules Engine</h2>
+                <h2 className="font-serif text-2xl font-bold text-foreground">Pricing & Rate Management</h2>
                 <p className="text-xs text-muted-foreground">
-                  Configure base rates, weekend multipliers, and peak seasonal surcharges with rule priorities.
+                  Manage centralized room prices, entire villa buyout rates, and seasonal surge rules.
                 </p>
               </div>
+
+              {/* Centralized Base Pricing Configuration Card */}
+              <form onSubmit={handleSavePricingConfig} className="p-5 bg-card border border-accent/40 rounded-lg space-y-4 shadow-sm">
+                <div className="flex items-center justify-between border-b border-border pb-2">
+                  <div>
+                    <h3 className="font-serif font-bold text-base text-foreground flex items-center gap-2">
+                      <Building className="w-4 h-4 text-accent" /> Centralized Accommodation Base Rates
+                    </h3>
+                    <p className="text-[11px] text-muted-foreground">
+                      Single source of truth for website cards, reservation engine, quotes, and payment gateway.
+                    </p>
+                  </div>
+                  <Button type="submit" disabled={savingPricing} size="sm" className="bg-primary text-primary-foreground text-xs">
+                    {savingPricing ? 'Saving Changes...' : 'Save & Publish Rates'}
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
+                  {/* Entire Villa */}
+                  <div className="p-3.5 bg-accent/5 border border-accent/30 rounded-md space-y-1.5">
+                    <div className="flex justify-between items-center">
+                      <Label className="text-xs font-bold text-foreground flex items-center gap-1">
+                        <Building className="w-3.5 h-3.5 text-accent" /> Entire Villa (All 3 Suites)
+                      </Label>
+                      <Badge variant="outline" className="text-[10px] border-accent text-accent">Buyout</Badge>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">Sleeps up to 6 guests</p>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-2.5 text-xs text-muted-foreground font-semibold">₹</span>
+                      <Input
+                        type="number"
+                        min={1000}
+                        step={500}
+                        value={pricingConfig.entireVillaPrice}
+                        onChange={(e) => setPricingConfig({ ...pricingConfig, entireVillaPrice: Number(e.target.value) })}
+                        className="pl-6 h-9 font-semibold text-sm bg-background"
+                        required
+                      />
+                    </div>
+                    <span className="text-[10px] text-muted-foreground block text-right">per night</span>
+                  </div>
+
+                  {/* Room 1 */}
+                  <div className="p-3.5 bg-muted/40 border border-border rounded-md space-y-1.5">
+                    <Label className="text-xs font-bold text-foreground">Suite 1: Master Suite</Label>
+                    <p className="text-[10px] text-muted-foreground">Room ID: room-1</p>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-2.5 text-xs text-muted-foreground font-semibold">₹</span>
+                      <Input
+                        type="number"
+                        min={1000}
+                        step={500}
+                        value={pricingConfig.room1Price}
+                        onChange={(e) => setPricingConfig({ ...pricingConfig, room1Price: Number(e.target.value) })}
+                        className="pl-6 h-9 font-semibold text-sm bg-background"
+                        required
+                      />
+                    </div>
+                    <span className="text-[10px] text-muted-foreground block text-right">per night</span>
+                  </div>
+
+                  {/* Room 2 */}
+                  <div className="p-3.5 bg-muted/40 border border-border rounded-md space-y-1.5">
+                    <Label className="text-xs font-bold text-foreground">Suite 2: Pine Suite</Label>
+                    <p className="text-[10px] text-muted-foreground">Room ID: room-2</p>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-2.5 text-xs text-muted-foreground font-semibold">₹</span>
+                      <Input
+                        type="number"
+                        min={1000}
+                        step={500}
+                        value={pricingConfig.room2Price}
+                        onChange={(e) => setPricingConfig({ ...pricingConfig, room2Price: Number(e.target.value) })}
+                        className="pl-6 h-9 font-semibold text-sm bg-background"
+                        required
+                      />
+                    </div>
+                    <span className="text-[10px] text-muted-foreground block text-right">per night</span>
+                  </div>
+
+                  {/* Room 3 */}
+                  <div className="p-3.5 bg-muted/40 border border-border rounded-md space-y-1.5">
+                    <Label className="text-xs font-bold text-foreground">Suite 3: Garden Room</Label>
+                    <p className="text-[10px] text-muted-foreground">Room ID: room-3</p>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-2.5 text-xs text-muted-foreground font-semibold">₹</span>
+                      <Input
+                        type="number"
+                        min={1000}
+                        step={500}
+                        value={pricingConfig.room3Price}
+                        onChange={(e) => setPricingConfig({ ...pricingConfig, room3Price: Number(e.target.value) })}
+                        className="pl-6 h-9 font-semibold text-sm bg-background"
+                        required
+                      />
+                    </div>
+                    <span className="text-[10px] text-muted-foreground block text-right">per night</span>
+                  </div>
+                </div>
+              </form>
 
               {/* Create Rule Form */}
               <form onSubmit={handleCreateRule} className="p-4 bg-card border border-border rounded-lg space-y-3">
@@ -977,6 +1144,87 @@ export default function AdminDashboardPage() {
                       <span>HMAC SHA-256 Active</span>
                     </div>
                   </div>
+                </div>
+
+                {/* Account & Payment Methods Live Diagnostic */}
+                <div className="pt-2 border-t border-border/70 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-serif font-bold text-xs text-foreground">Razorpay Account & Method Audit</h4>
+                      <p className="text-[11px] text-muted-foreground">
+                        Inspect active UPI, QR, Card, and NetBanking capabilities configured on this Key ID.
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={runRazorpayDiagnostics}
+                      disabled={runningDiag}
+                      className="text-xs flex items-center gap-1.5"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${runningDiag ? 'animate-spin' : ''}`} />
+                      {runningDiag ? 'Auditing Account...' : 'Run Live Diagnostic'}
+                    </Button>
+                  </div>
+
+                  {razorpayDiag && (
+                    <div className="p-3 bg-muted/40 border border-border/70 rounded-md text-xs space-y-3">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                        <div className="p-2 bg-background rounded border border-border/50">
+                          <span className="text-muted-foreground block text-[10px]">Gateway Mode:</span>
+                          <span className="font-bold font-mono text-foreground">{razorpayDiag.mode}</span>
+                        </div>
+                        <div className="p-2 bg-background rounded border border-border/50">
+                          <span className="text-muted-foreground block text-[10px]">Account Status:</span>
+                          <span className="font-bold text-emerald-600 dark:text-emerald-400">{razorpayDiag.accountStatus}</span>
+                        </div>
+                        <div className="p-2 bg-background rounded border border-border/50">
+                          <span className="text-muted-foreground block text-[10px]">UPI & Dynamic QR:</span>
+                          <span className={`font-bold ${razorpayDiag.upiStatus?.upiEnabled ? 'text-emerald-600' : 'text-red-500'}`}>
+                            {razorpayDiag.upiStatus?.upiEnabled ? 'ENABLED' : 'INACTIVE'}
+                          </span>
+                        </div>
+                        <div className="p-2 bg-background rounded border border-border/50">
+                          <span className="text-muted-foreground block text-[10px]">Order Test:</span>
+                          <span className={`font-bold ${razorpayDiag.orderCreationTest?.success ? 'text-emerald-600' : 'text-amber-500'}`}>
+                            {razorpayDiag.orderCreationTest?.success ? 'AUTHORIZED' : 'CHECK FAILED'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="text-[11px] space-y-1">
+                        <p className="font-semibold text-foreground">Active Payment Instruments:</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          <Badge variant={razorpayDiag.upiStatus?.upiEnabled ? 'default' : 'secondary'} className="text-[10px]">
+                            UPI {razorpayDiag.upiStatus?.upiEnabled ? '✓' : '✗'}
+                          </Badge>
+                          <Badge variant={razorpayDiag.upiStatus?.upiIntentEnabled ? 'default' : 'secondary'} className="text-[10px]">
+                            UPI Intent (GPay/PhonePe) {razorpayDiag.upiStatus?.upiIntentEnabled ? '✓' : '✗'}
+                          </Badge>
+                          <Badge variant={razorpayDiag.upiStatus?.upiQrSupported ? 'default' : 'secondary'} className="text-[10px]">
+                            Dynamic UPI QR {razorpayDiag.upiStatus?.upiQrSupported ? '✓' : '✗'}
+                          </Badge>
+                          <Badge variant={razorpayDiag.otherMethods?.card ? 'default' : 'secondary'} className="text-[10px]">
+                            Credit / Debit Cards {razorpayDiag.otherMethods?.card ? '✓' : '✗'}
+                          </Badge>
+                          <Badge variant={razorpayDiag.otherMethods?.netbanking ? 'default' : 'secondary'} className="text-[10px]">
+                            NetBanking (50+ Banks) {razorpayDiag.otherMethods?.netbanking ? '✓' : '✗'}
+                          </Badge>
+                          <Badge variant={razorpayDiag.otherMethods?.wallet ? 'default' : 'secondary'} className="text-[10px]">
+                            Wallets {razorpayDiag.otherMethods?.wallet ? '✓' : '✗'}
+                          </Badge>
+                        </div>
+                      </div>
+
+                      {razorpayDiag.restrictionsOrNotes?.length > 0 && (
+                        <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded text-[11px] text-amber-900 dark:text-amber-300">
+                          {razorpayDiag.restrictionsOrNotes.map((note: string, idx: number) => (
+                            <p key={idx}>• {note}</p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 

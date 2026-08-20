@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { prisma } from './db';
 import { hashPassword, comparePassword } from './auth';
 import { calculateBookingPrice, Rule, CouponData, PricingQuote } from './pricingEngine';
+import { defaultPricingConfig, getRoomPrice, getEntireVillaPrice, PricingConfig } from '@/config/pricingConfig';
 import { format, parseISO, addMinutes } from 'date-fns';
 
 export function normalizeDateOnly(dateStrOrObj: string | Date | null | undefined): string {
@@ -223,10 +224,10 @@ class PersistentStore {
       maxGuests: 6,
       bedroomsCount: 3,
       bathroomsCount: 3,
-      basePrice: 45000,
-      cleaningFee: 3500,
-      serviceFee: 2250,
-      taxRate: 18,
+      basePrice: getEntireVillaPrice(),
+      cleaningFee: 0,
+      serviceFee: 0,
+      taxRate: 0,
       address: 'Gulmarg Road, Tangmarg',
       city: 'Gulmarg',
       state: 'Jammu & Kashmir',
@@ -244,7 +245,7 @@ class PersistentStore {
         description: 'King bed, private balcony, fireplace & soaking tub with mountain views',
         capacity: 2,
         bedType: 'King bed',
-        pricePerNight: 18000,
+        pricePerNight: getRoomPrice('room-1'),
         imageUrl: '/images/bedroom/bedroom1.webp',
         isAvailable: true,
         createdAt: new Date().toISOString(),
@@ -258,7 +259,7 @@ class PersistentStore {
         description: 'Deluxe king room framed by pine forest views and marble bath',
         capacity: 2,
         bedType: 'King bed',
-        pricePerNight: 15000,
+        pricePerNight: getRoomPrice('room-2'),
         imageUrl: '/images/bedroom/bedroom2.jpg',
         isAvailable: true,
         createdAt: new Date().toISOString(),
@@ -272,7 +273,7 @@ class PersistentStore {
         description: 'Flexible twin-to-king room opening onto the herb garden',
         capacity: 2,
         bedType: 'Twin / King',
-        pricePerNight: 12000,
+        pricePerNight: getRoomPrice('room-3'),
         imageUrl: '/images/bedroom/bedroom_(2).jpg',
         isAvailable: true,
         createdAt: new Date().toISOString(),
@@ -287,7 +288,7 @@ class PersistentStore {
         name: 'Standard Nightly Rate',
         ruleType: 'BASE',
         priority: 1,
-        minStayNights: 2,
+        minStayNights: 1,
         extraGuestFee: 2500,
         isActive: true,
       },
@@ -298,7 +299,7 @@ class PersistentStore {
         ruleType: 'WEEKEND',
         priority: 10,
         priceMultiplier: 1.15,
-        minStayNights: 2,
+        minStayNights: 1,
         isWeekendRule: true,
         isActive: true,
       },
@@ -434,12 +435,6 @@ class PersistentStore {
       createdAt: new Date().toISOString(),
     };
 
-    const sampleAvailabilities = [
-      { id: 'av-1', villaId: villa.id, date: '2026-10-15', isBlocked: true, notes: 'Scheduled Heating & Chimney Maintenance' },
-      { id: 'av-2', villaId: villa.id, date: '2026-10-16', isBlocked: true, notes: 'Scheduled Heating & Chimney Maintenance' },
-      { id: 'av-3', villaId: villa.id, date: '2026-10-17', isBlocked: true, notes: 'Scheduled Heating & Chimney Maintenance' },
-    ];
-
     const reviews = [
       {
         id: 'rev-1',
@@ -484,13 +479,13 @@ class PersistentStore {
       rooms,
       amenities: [],
       gallery: [],
-      bookings: [sampleBooking],
-      guests: [sampleGuest],
-      availabilities: sampleAvailabilities,
+      bookings: [],
+      guests: [],
+      availabilities: [],
       pricingRules,
       coupons,
-      payments: [samplePayment],
-      invoices: [sampleInvoice],
+      payments: [],
+      invoices: [],
       cancellations: [],
       refunds: [],
       reviews,
@@ -794,24 +789,18 @@ export const dataStore = {
       };
     }
 
-    // 2. Check existing confirmed or active pending locked bookings
+    // 2. Check existing confirmed or active paid bookings ONLY
     const overlappingBookings = memStore.bookings.filter((b) => {
       if (b.villaId !== villaId) return false;
 
-      // Check status: CANCELLED and REFUNDED do not block
-      if (b.status === 'CANCELLED' || b.status === 'REFUNDED') return false;
+      // Only CONFIRMED bookings or PAID bookings occupy dates
+      if (b.status !== 'CONFIRMED' && b.paymentStatus !== 'PAID') return false;
 
       // Check room matching:
       // If either reservation is for the entire villa (no roomId or 'entire-villa'), they conflict
       // If both specify different individual rooms, they do not conflict
       if (roomId && b.roomId && roomId !== 'entire-villa' && b.roomId !== 'entire-villa' && b.roomId !== roomId) {
         return false;
-      }
-
-      // Check if pending lock is expired
-      if (b.status === 'PENDING' && b.lockExpiresAt) {
-        const lockExp = new Date(b.lockExpiresAt).getTime();
-        if (lockExp < now) return false; // Expired lock, safe to ignore
       }
 
       const bIn = normalizeDateOnly(b.checkIn);
@@ -870,6 +859,68 @@ export const dataStore = {
     };
   },
 
+  // CENTRALIZED PRICING CONFIGURATION HELPERS
+  getPricingConfig(): PricingConfig {
+    const villa = memStore.villas[0];
+    const roomPrices: Record<string, number> = {};
+    memStore.rooms.forEach((r) => {
+      roomPrices[r.id] = r.pricePerNight || defaultPricingConfig.roomPricePerNight;
+    });
+
+    return {
+      roomPricePerNight: memStore.rooms[0]?.pricePerNight || defaultPricingConfig.roomPricePerNight,
+      entireVillaPricePerNight: villa?.basePrice || defaultPricingConfig.entireVillaPricePerNight,
+      currency: defaultPricingConfig.currency,
+      currencySymbol: defaultPricingConfig.currencySymbol,
+      roomPrices: {
+        'room-1': roomPrices['room-1'] || defaultPricingConfig.roomPricePerNight,
+        'room-2': roomPrices['room-2'] || defaultPricingConfig.roomPricePerNight,
+        'room-3': roomPrices['room-3'] || defaultPricingConfig.roomPricePerNight,
+      },
+    };
+  },
+
+  async updatePricingConfig(newConfig: {
+    roomPricePerNight?: number;
+    entireVillaPricePerNight?: number;
+    roomPrices?: Record<string, number>;
+  }): Promise<PricingConfig> {
+    if (newConfig.entireVillaPricePerNight !== undefined && newConfig.entireVillaPricePerNight > 0) {
+      if (memStore.villas[0]) {
+        memStore.villas[0].basePrice = Number(newConfig.entireVillaPricePerNight);
+        memStore.villas[0].updatedAt = new Date().toISOString();
+      }
+    }
+
+    if (newConfig.roomPricePerNight !== undefined && newConfig.roomPricePerNight > 0) {
+      const perRoom = Number(newConfig.roomPricePerNight);
+      memStore.rooms.forEach((r) => {
+        r.pricePerNight = perRoom;
+        r.updatedAt = new Date().toISOString();
+      });
+    }
+
+    if (newConfig.roomPrices) {
+      Object.entries(newConfig.roomPrices).forEach(([rId, price]) => {
+        const room = memStore.rooms.find((r) => r.id === rId);
+        if (room && Number(price) > 0) {
+          room.pricePerNight = Number(price);
+          room.updatedAt = new Date().toISOString();
+        }
+      });
+    }
+
+    this.addAuditLog({
+      userId: 'ADMIN',
+      action: 'UPDATE_PRICING_CONFIG',
+      entity: 'Pricing',
+      details: `Updated pricing: Room ₹${newConfig.roomPricePerNight || 'same'}, Villa ₹${newConfig.entireVillaPricePerNight || 'same'}`,
+    });
+
+    memStore.saveToDisk();
+    return this.getPricingConfig();
+  },
+
   // PRICING CALCULATION WITH AVAILABILITY INTEGRATION
   async getPricingQuote(input: {
     villaId: string;
@@ -886,6 +937,8 @@ export const dataStore = {
       const room = memStore.rooms.find((r) => r.id === input.roomId);
       if (room && room.pricePerNight) {
         roomBasePrice = room.pricePerNight;
+      } else {
+        roomBasePrice = getRoomPrice(input.roomId);
       }
     }
 
@@ -905,7 +958,7 @@ export const dataStore = {
     );
 
     const baseQuote = calculateBookingPrice({
-      villaBasePrice: villa.basePrice || 45000,
+      villaBasePrice: villa.basePrice || getEntireVillaPrice(),
       roomBasePrice,
       pricingRules: memStore.pricingRules,
       coupon: couponData,

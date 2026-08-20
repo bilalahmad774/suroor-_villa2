@@ -104,11 +104,24 @@ function Fact({ icon, label }: { icon: React.ReactNode; label: string }) {
   );
 }
 
+function getDefaultFloatingDates() {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const checkOut = new Date();
+  checkOut.setDate(checkOut.getDate() + 4);
+  const fmt = (d: Date) => d.toISOString().split('T')[0];
+  return {
+    checkIn: fmt(tomorrow),
+    checkOut: fmt(checkOut),
+  };
+}
+
 function FloatingBookingWidget() {
   const reduce = useReducedMotion();
   const { openBooking } = useBooking();
-  const [checkIn, setCheckIn] = useState('2026-09-10');
-  const [checkOut, setCheckOut] = useState('2026-09-13');
+  const defaultDates = getDefaultFloatingDates();
+  const [checkIn, setCheckIn] = useState(defaultDates.checkIn);
+  const [checkOut, setCheckOut] = useState(defaultDates.checkOut);
   const [guests, setGuests] = useState('4');
 
   const handleFloatingSubmit = (e: React.FormEvent) => {

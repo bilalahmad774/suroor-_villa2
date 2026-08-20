@@ -8,6 +8,7 @@
 
 import type { Room } from '@/types/domain';
 import { siteConfig } from '@/config/siteConfig';
+import { defaultPricingConfig, getRoomPrice } from '@/config/pricingConfig';
 
 export const villaInfo = {
   name: 'Suroor Villa',
@@ -19,8 +20,21 @@ export const villaInfo = {
   propertyType: 'Private luxury villa',
   checkIn: '2:00 PM',
   checkOut: '11:00 AM',
+  pricePerNight: defaultPricingConfig.entireVillaPricePerNight,
   description:
     'Set on a quiet ridge above the pine line, Suroor Villa is a three-bedroom sanctuary built from local stone and timber. Floor-to-ceiling glass frames the Himalayan ridge, while interiors balance Kashmiri craft with quiet, modern comfort. The villa is rented as a single private estate — your group alone.',
+};
+
+export const entireVillaInfo = {
+  id: 'entire-villa',
+  name: 'Entire Villa',
+  tagline: 'All 3 private suites & exclusive estate buyout',
+  pricePerNight: defaultPricingConfig.entireVillaPricePerNight,
+  capacity: 6,
+  bedrooms: 3,
+  bathrooms: 3,
+  description:
+    'Full private buyout of Suroor Villa including all 3 luxury suites (The Master Suite, The Pine Suite, and The Garden Room), private chef dining, Kashmiri butler service, and private landscaped grounds for your group alone.',
 };
 
 export const propertyStats = [
@@ -38,7 +52,7 @@ export const villaDetails = [
   { label: 'Location', value: 'Gulmarg Road, Kashmir' },
   { label: 'Check-in', value: '2:00 PM' },
   { label: 'Check-out', value: '11:00 AM' },
-  { label: 'Minimum stay', value: '2 nights (DEMO)' },
+  { label: 'Minimum stay', value: '1 night' },
 ];
 
 export const rooms: Room[] = [
@@ -49,7 +63,7 @@ export const rooms: Room[] = [
     description:
       'A king-bedded suite with a private balcony, fireplace, and an uninterrupted view of the ridgeline. Marble bath with rain shower and a deep soaking tub.',
     capacity: 2,
-    basePricePerNight: 18000,
+    basePricePerNight: getRoomPrice('room-1'),
     amenities: ['King bed', 'Private balcony', 'Fireplace', 'Soaking tub', 'Mountain view'],
     images: [],
     isActive: true,
@@ -65,7 +79,7 @@ export const rooms: Room[] = [
     description:
       'A deluxe king room framed by pine forest. Plush seating nook, writing desk, and an en-suite bath with marble vanity.',
     capacity: 2,
-    basePricePerNight: 15000,
+    basePricePerNight: getRoomPrice('room-2'),
     amenities: ['King bed', 'Forest view', 'En-suite bath', 'Writing desk'],
     images: [],
     isActive: true,
@@ -81,7 +95,7 @@ export const rooms: Room[] = [
     description:
       'A flexible twin-to-king room opening onto the herb garden. Bright, airy, and ideal for children or friends sharing the villa.',
     capacity: 2,
-    basePricePerNight: 12000,
+    basePricePerNight: getRoomPrice('room-3'),
     amenities: ['Twin-to-king beds', 'Garden access', 'En-suite bath'],
     images: [],
     isActive: true,

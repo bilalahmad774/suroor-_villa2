@@ -1,4 +1,5 @@
-import { parseISO, differenceInCalendarDays, eachDayOfInterval, isWeekend, format } from 'date-fns';
+import { parseISO, differenceInCalendarDays, eachDayOfInterval, format } from 'date-fns';
+import { defaultPricingConfig, getRoomPrice, getEntireVillaPrice, getAccommodationTitle } from '@/config/pricingConfig';
 
 export interface PricingInput {
   villaId: string;
@@ -21,6 +22,8 @@ export interface DayBreakdown {
 export interface PricingQuote {
   villaId: string;
   roomId?: string;
+  accommodationName: string;
+  nightlyRate: number;
   checkIn: string;
   checkOut: string;
   nights: number;
@@ -79,7 +82,7 @@ export interface CouponData {
 }
 
 export function calculateBookingPrice({
-  villaBasePrice = 45000,
+  villaBasePrice = defaultPricingConfig.entireVillaPricePerNight,
   roomBasePrice,
   pricingRules = [],
   coupon,
@@ -91,6 +94,16 @@ export function calculateBookingPrice({
   coupon?: CouponData | null;
   input: PricingInput;
 }): PricingQuote {
+  const isEntireVilla = !input.roomId || input.roomId === 'entire-villa';
+  const accommodationName = isEntireVilla
+    ? 'Entire Villa'
+    : getAccommodationTitle(input.roomId);
+
+  // Single centralized base price: ₹30,000 for Entire Villa, ₹15,000 for Room
+  const basePricePerNight = isEntireVilla
+    ? (villaBasePrice || getEntireVillaPrice())
+    : (roomBasePrice || getRoomPrice(input.roomId));
+
   const start = parseISO(input.checkIn);
   const end = parseISO(input.checkOut);
   const nights = Math.max(1, differenceInCalendarDays(end, start));
@@ -98,6 +111,9 @@ export function calculateBookingPrice({
   if (nights < 1 || isNaN(start.getTime()) || isNaN(end.getTime())) {
     return {
       villaId: input.villaId,
+      roomId: input.roomId,
+      accommodationName,
+      nightlyRate: basePricePerNight,
       checkIn: input.checkIn,
       checkOut: input.checkOut,
       nights: 0,
@@ -109,10 +125,10 @@ export function calculateBookingPrice({
       subtotal: 0,
       discountAmount: 0,
       taxableAmount: 0,
-      taxRate: 18,
+      taxRate: 0,
       taxAmount: 0,
       totalAmount: 0,
-      currency: 'INR',
+      currency: defaultPricingConfig.currency,
       minStaySatisfied: false,
       minStayNights: 1,
       maxStaySatisfied: true,
@@ -128,93 +144,34 @@ export function calculateBookingPrice({
     end: new Date(end.getTime() - 24 * 60 * 60 * 1000),
   });
 
-  const basePricePerNight = roomBasePrice || villaBasePrice;
-  let overallMinStay = 2; // Default villa min stay
-  let overallMaxStay: number | undefined = undefined;
-
   const dayBreakdown: DayBreakdown[] = [];
   let baseNightlySum = 0;
-
-  // Active rules for this villa
-  const activeRules = pricingRules.filter((r) => r.isActive);
 
   for (const day of daysInterval) {
     const dateStr = format(day, 'yyyy-MM-dd');
     const dayOfWeekStr = format(day, 'EEEE');
-    const isWknd = isWeekend(day);
-
-    let applicableRule: Rule | null = null;
-    let highestPriority = -1;
-
-    // Find highest priority matching rule for this day
-    for (const rule of activeRules) {
-      let matches = false;
-
-      if (rule.ruleType === 'WEEKEND' && isWknd) {
-        matches = true;
-      } else if (rule.startDate && rule.endDate) {
-        const rStart = parseISO(rule.startDate);
-        const rEnd = parseISO(rule.endDate);
-        if (day >= rStart && day <= rEnd) {
-          matches = true;
-        }
-      } else if (rule.ruleType === 'BASE') {
-        matches = true;
-      }
-
-      if (matches && rule.priority > highestPriority) {
-        highestPriority = rule.priority;
-        applicableRule = rule;
-      }
-    }
-
-    let effectiveRate = basePricePerNight;
-    let ruleName = 'Standard Base Rate';
-    let ruleType = 'BASE';
-
-    if (applicableRule) {
-      ruleName = applicableRule.name;
-      ruleType = applicableRule.ruleType;
-
-      if (applicableRule.fixedPrice !== undefined && applicableRule.fixedPrice !== null) {
-        effectiveRate = applicableRule.fixedPrice;
-      } else if (applicableRule.priceMultiplier) {
-        effectiveRate = Math.round(basePricePerNight * applicableRule.priceMultiplier);
-      }
-
-      if (applicableRule.minStayNights && applicableRule.minStayNights > overallMinStay) {
-        overallMinStay = applicableRule.minStayNights;
-      }
-      if (applicableRule.maxStayNights) {
-        overallMaxStay = applicableRule.maxStayNights;
-      }
-    }
+    const effectiveRate = basePricePerNight;
 
     baseNightlySum += effectiveRate;
     dayBreakdown.push({
       date: dateStr,
       dayOfWeek: dayOfWeekStr,
       baseRate: basePricePerNight,
-      appliedRuleName: ruleName,
-      ruleType,
+      appliedRuleName: isEntireVilla ? 'Entire Villa Nightly Rate' : 'Room Suite Nightly Rate',
+      ruleType: 'BASE',
       effectiveRate,
     });
   }
 
-  // Min and max stay checks
+  const overallMinStay = 1;
   const minStaySatisfied = nights >= overallMinStay;
-  const maxStaySatisfied = !overallMaxStay || nights <= overallMaxStay;
+  const maxStaySatisfied = true;
 
-  // Extra guest fee calculation (e.g. guests > 8: 2500 per extra guest per night)
-  const baseCapacity = 8;
-  const extraGuests = Math.max(0, input.guestCount - baseCapacity);
-  const extraGuestFeePerNight = 2500;
-  const totalExtraGuestFee = extraGuests * extraGuestFeePerNight * nights;
-
-  // Standard fixed fees
-  const cleaningFee = 3500;
-  const serviceFee = Math.round(baseNightlySum * 0.05); // 5% service fee
-  const subtotal = baseNightlySum + totalExtraGuestFee + cleaningFee + serviceFee;
+  // Base subtotal = nights * nightly rate
+  const extraGuestFee = 0;
+  const cleaningFee = 0;
+  const serviceFee = 0;
+  const subtotal = baseNightlySum;
 
   // Discount calculation
   let discountAmount = 0;
@@ -237,34 +194,23 @@ export function calculateBookingPrice({
     }
   }
 
-  // Ensure discount doesn't exceed subtotal
   discountAmount = Math.min(subtotal, Math.max(0, discountAmount));
-
   const taxableAmount = Math.max(0, subtotal - discountAmount);
-  const taxRate = 18; // 18% GST in India for luxury hospitality
-  const taxAmount = Math.round((taxableAmount * taxRate) / 100);
-  const totalAmount = taxableAmount + taxAmount;
-
-  let isValid = true;
-  let validationError: string | undefined = undefined;
-
-  if (!minStaySatisfied) {
-    isValid = false;
-    validationError = `Minimum stay required for these dates is ${overallMinStay} night${overallMinStay > 1 ? 's' : ''}.`;
-  } else if (!maxStaySatisfied && overallMaxStay) {
-    isValid = false;
-    validationError = `Maximum stay allowed is ${overallMaxStay} night${overallMaxStay > 1 ? 's' : ''}.`;
-  }
+  const taxRate = 0; // Transparent all-inclusive rate as requested (nights * rate)
+  const taxAmount = 0;
+  const totalAmount = taxableAmount;
 
   return {
     villaId: input.villaId,
     roomId: input.roomId,
+    accommodationName,
+    nightlyRate: basePricePerNight,
     checkIn: input.checkIn,
     checkOut: input.checkOut,
     nights,
     guestCount: input.guestCount,
     baseNightlySum,
-    extraGuestFee: totalExtraGuestFee,
+    extraGuestFee,
     cleaningFee,
     serviceFee,
     subtotal,
@@ -274,13 +220,11 @@ export function calculateBookingPrice({
     taxRate,
     taxAmount,
     totalAmount,
-    currency: 'INR',
+    currency: defaultPricingConfig.currency,
     minStaySatisfied,
     minStayNights: overallMinStay,
     maxStaySatisfied,
-    maxStayNights: overallMaxStay,
     dayBreakdown,
-    isValid,
-    validationError,
+    isValid: true,
   };
 }

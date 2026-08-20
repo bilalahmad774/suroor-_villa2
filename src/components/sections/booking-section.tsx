@@ -24,13 +24,26 @@ import { villaInfo, rooms as suites } from '@/config/content';
 import { siteConfig } from '@/config/siteConfig';
 import { useBooking } from '@/context/BookingContext';
 
+function getDefaultStayDates() {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const checkOut = new Date();
+  checkOut.setDate(checkOut.getDate() + 4);
+  const fmt = (d: Date) => d.toISOString().split('T')[0];
+  return {
+    checkIn: fmt(tomorrow),
+    checkOut: fmt(checkOut),
+  };
+}
+
 export function BookingSection() {
   const { openBooking } = useBooking();
+  const defaultDates = getDefaultStayDates();
 
   // Selected parameters
   const [selectedSuiteId, setSelectedSuiteId] = useState<string>('entire-villa');
-  const [checkIn, setCheckIn] = useState<string>('2026-09-10');
-  const [checkOut, setCheckOut] = useState<string>('2026-09-13');
+  const [checkIn, setCheckIn] = useState<string>(defaultDates.checkIn);
+  const [checkOut, setCheckOut] = useState<string>(defaultDates.checkOut);
   const [adults, setAdults] = useState<number>(3);
   const [children, setChildren] = useState<number>(1);
   const guestCount = adults + children;
@@ -326,44 +339,48 @@ export function BookingSection() {
                 <div className="space-y-2.5 text-xs text-muted-foreground pb-4 border-b border-border/60">
                   <div className="flex justify-between">
                     <span>
-                      ₹{quote.baseNightlyRate?.toLocaleString('en-IN')} × {quote.nights} night
+                      ₹{(quote.nightlyRate || quote.baseNightlyRate || (quote.nights ? Math.round(quote.baseNightlySum / quote.nights) : 15000))?.toLocaleString('en-IN')} × {quote.nights} night
                       {quote.nights > 1 ? 's' : ''}
                     </span>
-                    <span className="font-medium text-foreground">
-                      ₹{quote.roomCharges?.toLocaleString('en-IN')}
+                    <span className="font-semibold text-foreground">
+                      ₹{(quote.roomCharges || quote.baseNightlySum)?.toLocaleString('en-IN')}
                     </span>
                   </div>
 
-                  <div className="flex justify-between">
-                    <span>Cleaning & Private Chef Coordination</span>
-                    <span className="font-medium text-foreground">
-                      ₹{quote.cleaningFee?.toLocaleString('en-IN')}
-                    </span>
-                  </div>
+                  {quote.cleaningFee > 0 && (
+                    <div className="flex justify-between">
+                      <span>Cleaning & Private Chef Coordination</span>
+                      <span className="font-medium text-foreground">
+                        ₹{quote.cleaningFee?.toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                  )}
 
                   {quote.discountAmount > 0 && (
                     <div className="flex justify-between text-emerald-600 font-medium">
-                      <span>Discount ({quote.appliedCoupon?.code || 'Promo'})</span>
+                      <span>Discount ({quote.appliedCoupon?.code || quote.couponCode || 'Promo'})</span>
                       <span>-₹{quote.discountAmount?.toLocaleString('en-IN')}</span>
                     </div>
                   )}
 
-                  <div className="flex justify-between">
-                    <span>Statutory GST (9% CGST + 9% SGST)</span>
-                    <span className="font-medium text-foreground">
-                      ₹{quote.taxAmount?.toLocaleString('en-IN')}
-                    </span>
-                  </div>
+                  {quote.taxAmount > 0 && (
+                    <div className="flex justify-between">
+                      <span>Statutory Taxes</span>
+                      <span className="font-medium text-foreground">
+                        ₹{quote.taxAmount?.toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Total */}
                 <div className="flex items-baseline justify-between pt-1">
                   <div>
-                    <span className="text-xs text-muted-foreground block">Estimated Total Amount</span>
-                    <span className="text-[11px] text-muted-foreground">All taxes & fees included</span>
+                    <span className="text-xs text-muted-foreground block">Final Booking Total</span>
+                    <span className="text-[11px] text-muted-foreground">Transparent pricing • No hidden fees</span>
                   </div>
                   <span className="font-serif text-2xl sm:text-3xl font-bold text-foreground">
-                    ₹{quote.totalPayable?.toLocaleString('en-IN')}
+                    ₹{(quote.totalAmount ?? quote.totalPayable)?.toLocaleString('en-IN')}
                   </span>
                 </div>
 

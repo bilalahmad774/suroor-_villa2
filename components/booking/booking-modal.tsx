@@ -28,8 +28,13 @@ import {
   Tag,
   Phone,
   MessageCircle,
+  Home,
+  BedDouble,
+  Users,
 } from 'lucide-react';
 import { siteConfig } from '@/config/siteConfig';
+import { rooms } from '@/config/content';
+import { defaultPricingConfig, getRoomPrice, getEntireVillaPrice } from '@/config/pricingConfig';
 
 interface BookingModalProps {
   isOpen: boolean;
@@ -39,6 +44,18 @@ interface BookingModalProps {
   initialCheckOut?: string;
 }
 
+function getDefaultModalDates() {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const checkOut = new Date();
+  checkOut.setDate(checkOut.getDate() + 4);
+  const fmt = (d: Date) => d.toISOString().split('T')[0];
+  return {
+    checkIn: fmt(tomorrow),
+    checkOut: fmt(checkOut),
+  };
+}
+
 export function BookingModal({
   isOpen,
   onClose,
@@ -46,15 +63,18 @@ export function BookingModal({
   initialCheckIn,
   initialCheckOut,
 }: BookingModalProps) {
+  const defaultDates = getDefaultModalDates();
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
 
   // Form State
-  const [checkIn, setCheckIn] = useState(initialCheckIn || '2026-09-10');
-  const [checkOut, setCheckOut] = useState(initialCheckOut || '2026-09-13');
+  const [checkIn, setCheckIn] = useState(initialCheckIn || defaultDates.checkIn);
+  const [checkOut, setCheckOut] = useState(initialCheckOut || defaultDates.checkOut);
   const [guestCount, setGuestCount] = useState(4);
   const [adults, setAdults] = useState(3);
   const [children, setChildren] = useState(1);
-  const [selectedRoomId, setSelectedRoomId] = useState<string | undefined>(initialRoomId);
+  const [selectedRoomId, setSelectedRoomId] = useState<string>(
+    initialRoomId && initialRoomId !== 'entire-villa' ? initialRoomId : 'entire-villa'
+  );
 
   // Guest Info State
   const [primaryName, setPrimaryName] = useState('');
@@ -75,11 +95,26 @@ export function BookingModal({
   const [processingPayment, setProcessingPayment] = useState(false);
   const [confirmedData, setConfirmedData] = useState<any>(null);
 
+  // Helper for accommodation name & rate
+  const isEntireVilla = !selectedRoomId || selectedRoomId === 'entire-villa';
+  const selectedRoomObj = rooms.find((r) => r.id === selectedRoomId);
+  const accommodationName = isEntireVilla
+    ? 'Entire Villa (All 3 Suites)'
+    : selectedRoomObj?.name || 'Selected Suite';
+  const currentNightlyRate = isEntireVilla
+    ? getEntireVillaPrice()
+    : getRoomPrice(selectedRoomId);
+
   // Fetch Live Server Quote
   const fetchQuote = useCallback(
     async (couponToApply = appliedCoupon) => {
+      if (!checkIn || !checkOut || checkIn >= checkOut) {
+        setQuote(null);
+        return;
+      }
       setLoadingQuote(true);
       try {
+        const roomId = selectedRoomId === 'entire-villa' ? undefined : selectedRoomId;
         const res = await fetch('/api/booking/quote', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -89,15 +124,28 @@ export function BookingModal({
             checkOut,
             guestCount,
             couponCode: couponToApply || undefined,
-            roomId: selectedRoomId,
+            roomId,
           }),
         });
 
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to calculate pricing quote.');
+        if (!res.ok) {
+          setQuote({
+            isValid: false,
+            isAvailable: false,
+            validationError: data.error || 'Failed to calculate pricing quote.',
+            message: data.error || 'Failed to calculate pricing quote.',
+          });
+          return;
+        }
         setQuote(data);
       } catch (err: any) {
-        toast.error(err.message || 'Error updating price.');
+        setQuote({
+          isValid: false,
+          isAvailable: false,
+          validationError: err.message || 'Error updating price.',
+          message: err.message || 'Error updating price.',
+        });
       } finally {
         setLoadingQuote(false);
       }
@@ -109,7 +157,11 @@ export function BookingModal({
     if (isOpen) {
       if (initialCheckIn) setCheckIn(initialCheckIn);
       if (initialCheckOut) setCheckOut(initialCheckOut);
-      if (initialRoomId !== undefined) setSelectedRoomId(initialRoomId);
+      if (initialRoomId) {
+        setSelectedRoomId(initialRoomId);
+      } else {
+        setSelectedRoomId('entire-villa');
+      }
       setStep(1);
     }
   }, [isOpen, initialCheckIn, initialCheckOut, initialRoomId]);
@@ -128,9 +180,21 @@ export function BookingModal({
   };
 
   // Step 1 -> Step 2: Validate Dates & Quote
-  const handleProceedToGuests = () => {
-    if (!quote || !quote.isValid) {
-      toast.error(quote?.validationError || 'Please select valid check-in and check-out dates.');
+  const handleProceedToGuests = async () => {
+    if (!checkIn || !checkOut) {
+      toast.error('Please select check-in and check-out dates.');
+      return;
+    }
+    if (checkIn >= checkOut) {
+      toast.error('Check-out date must be after check-in date.');
+      return;
+    }
+    if (quote && quote.isAvailable === false) {
+      toast.error(quote.validationError || quote.message || 'Selected dates are not available.');
+      return;
+    }
+    if (quote && quote.isValid === false) {
+      toast.error(quote.validationError || quote.message || 'Please select valid booking dates.');
       return;
     }
     setStep(2);
@@ -146,12 +210,13 @@ export function BookingModal({
 
     setProcessingPayment(true);
     try {
+      const roomId = selectedRoomId === 'entire-villa' ? undefined : selectedRoomId;
       const res = await fetch('/api/booking/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           villaId: 'villa-suroor-main',
-          roomId: selectedRoomId,
+          roomId,
           checkIn,
           checkOut,
           guestCount,
@@ -211,29 +276,33 @@ export function BookingModal({
 
       const orderData = await orderRes.json();
       if (!orderRes.ok || !orderData.success) {
-        throw new Error(orderData.error || 'Failed to create payment order on gateway.');
+        throw new Error(orderData.error || 'Payment initialization failed.');
       }
 
-      // 2A. RAZORPAY FRONTEND CHECKOUT
+      // 2A. RAZORPAY GATEWAY CHECKOUT MODAL
       if (orderData.gateway === 'razorpay') {
         const loaded = await loadRazorpayScript();
-        if (!loaded) throw new Error('Razorpay SDK failed to load. Please check connection.');
+        if (!loaded) {
+          throw new Error('Razorpay SDK failed to load. Please check internet connection.');
+        }
 
         const options = {
           key: orderData.keyId,
-          amount: Math.round(orderData.amount * 100),
-          currency: orderData.currency || 'INR',
-          name: 'Suroor Villa Kashmir',
-          description: `Booking Reservation #${createdBooking.referenceCode}`,
+          amount: orderData.amount, // In paise
+          currency: orderData.currency,
+          name: siteConfig.name,
+          description: `Stay Reservation (${createdBooking.referenceCode})`,
+          image: '/images/hero/hero.webp',
           order_id: orderData.orderId,
-          modal: {
-            ondismiss: () => {
-              setProcessingPayment(false);
-              toast.info('Razorpay payment window closed. Your 15-minute reservation hold remains active.');
-            },
+          prefill: {
+            name: primaryName,
+            email: primaryEmail,
+            contact: primaryPhone,
           },
-          handler: async (response: any) => {
-            setProcessingPayment(true);
+          theme: {
+            color: '#1c241c',
+          },
+          handler: async function (response: any) {
             await verifyAndConfirmPayment({
               bookingId: createdBooking.id,
               gateway: 'razorpay',
@@ -242,30 +311,17 @@ export function BookingModal({
               razorpaySignature: response.razorpay_signature,
             });
           },
-          prefill: {
-            name: primaryName,
-            email: primaryEmail,
-            contact: primaryPhone,
+          modal: {
+            ondismiss: function () {
+              setProcessingPayment(false);
+              toast.info('Payment window closed. Your 15-minute reservation hold remains active.');
+            },
           },
-          notes: {
-            bookingId: createdBooking.id,
-            referenceCode: createdBooking.referenceCode,
-            guestName: primaryName,
-          },
-          theme: { color: '#1A2E22' },
-          // Explicitly enable and configure UPI, QR Code, Cards, NetBanking, and Wallets
-          method: {
-            upi: true,
-            card: true,
-            netbanking: true,
-            wallet: true,
-          },
-          // Razorpay Standard Checkout configuration supporting UPI, Dynamic UPI QR Code, Cards, and NetBanking
           config: {
             display: {
               blocks: {
                 upi: {
-                  name: 'UPI / QR Code (Google Pay, PhonePe, Paytm, BHIM)',
+                  name: 'Pay via UPI (GPay / PhonePe / Paytm / BHIM)',
                   instruments: [
                     {
                       method: 'upi',
@@ -273,7 +329,7 @@ export function BookingModal({
                   ],
                 },
                 other: {
-                  name: 'Cards, NetBanking & Other Methods',
+                  name: 'Cards & NetBanking',
                   instruments: [
                     {
                       method: 'card',
@@ -380,7 +436,7 @@ export function BookingModal({
                 Reserve Your Stay at Suroor Villa
               </DialogTitle>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Kashmir Private Estate Booking Engine — Verified Real-Time Availability
+                Kashmir Private Estate Booking Engine — Transparent Direct Rates
               </p>
             </div>
           </div>
@@ -388,28 +444,28 @@ export function BookingModal({
           {/* Stepper Header */}
           <div className="grid grid-cols-4 gap-2 pt-3 text-center text-xs font-medium">
             <div
-              className={`py-1.5 rounded-sm ${
+              className={`py-1.5 rounded-sm transition-colors ${
                 step === 1 ? 'bg-primary text-primary-foreground font-semibold' : 'bg-muted text-muted-foreground'
               }`}
             >
-              1. Dates & Quote
+              1. Accommodation & Dates
             </div>
             <div
-              className={`py-1.5 rounded-sm ${
+              className={`py-1.5 rounded-sm transition-colors ${
                 step === 2 ? 'bg-primary text-primary-foreground font-semibold' : 'bg-muted text-muted-foreground'
               }`}
             >
               2. Guest Info
             </div>
             <div
-              className={`py-1.5 rounded-sm ${
+              className={`py-1.5 rounded-sm transition-colors ${
                 step === 3 ? 'bg-primary text-primary-foreground font-semibold' : 'bg-muted text-muted-foreground'
               }`}
             >
               3. Payment
             </div>
             <div
-              className={`py-1.5 rounded-sm ${
+              className={`py-1.5 rounded-sm transition-colors ${
                 step === 4 ? 'bg-emerald-700 text-white font-semibold' : 'bg-muted text-muted-foreground'
               }`}
             >
@@ -418,9 +474,70 @@ export function BookingModal({
           </div>
         </DialogHeader>
 
-        {/* STEP 1: DATES, GUESTS & PRICING BREAKDOWN */}
+        {/* STEP 1: ACCOMMODATION SELECTION, DATES & PRICING BREAKDOWN */}
         {step === 1 && (
           <div className="space-y-5 pt-2">
+            {/* Accommodation Selection Buttons */}
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold uppercase tracking-wider text-foreground block">
+                Select Accommodation
+              </Label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {/* Entire Villa Option */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedRoomId('entire-villa')}
+                  className={`p-3.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                    selectedRoomId === 'entire-villa'
+                      ? 'border-accent bg-accent/10 text-foreground ring-1 ring-accent'
+                      : 'border-border bg-card/60 text-muted-foreground hover:border-accent/40'
+                  }`}
+                >
+                  <div className="flex items-center justify-between w-full">
+                    <span className="font-semibold text-xs text-foreground flex items-center gap-1.5">
+                      <Home className="w-3.5 h-3.5 text-accent" /> Reserve Entire Villa
+                    </span>
+                    <Badge variant="outline" className="text-[10px] font-bold border-accent text-accent">
+                      ₹{getEntireVillaPrice().toLocaleString('en-IN')}/night
+                    </Badge>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-1.5">
+                    All 3 suites (Sleeps up to 6) • Exclusive private buyout
+                  </p>
+                </button>
+
+                {/* Individual Suites */}
+                {rooms.map((r) => {
+                  const roomPrice = getRoomPrice(r.id);
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      onClick={() => setSelectedRoomId(r.id)}
+                      className={`p-3.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                        selectedRoomId === r.id
+                          ? 'border-accent bg-accent/10 text-foreground ring-1 ring-accent'
+                          : 'border-border bg-card/60 text-muted-foreground hover:border-accent/40'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className="font-semibold text-xs text-foreground flex items-center gap-1.5 truncate max-w-[150px]">
+                          <BedDouble className="w-3.5 h-3.5 text-accent" /> {r.name}
+                        </span>
+                        <Badge variant="outline" className="text-[10px] font-bold border-border text-foreground">
+                          ₹{roomPrice.toLocaleString('en-IN')}/night
+                        </Badge>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground mt-1.5">
+                        {r.view} • Up to {r.capacity} guests • {r.bedType}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Check-in / Check-out Dates */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <Label htmlFor="chk-in" className="flex items-center gap-1.5 text-xs font-semibold">
@@ -429,9 +546,10 @@ export function BookingModal({
                 <Input
                   id="chk-in"
                   type="date"
+                  min={new Date().toISOString().split('T')[0]}
                   value={checkIn}
                   onChange={(e) => setCheckIn(e.target.value)}
-                  className="bg-background"
+                  className="bg-background h-10"
                 />
               </div>
 
@@ -442,22 +560,25 @@ export function BookingModal({
                 <Input
                   id="chk-out"
                   type="date"
+                  min={checkIn || new Date().toISOString().split('T')[0]}
                   value={checkOut}
                   onChange={(e) => setCheckOut(e.target.value)}
-                  className="bg-background"
+                  className="bg-background h-10"
                 />
               </div>
             </div>
 
+            {/* Guest count */}
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <Label className="text-xs">Total Guests</Label>
                 <Input
                   type="number"
                   min={1}
-                  max={6}
+                  max={isEntireVilla ? 6 : selectedRoomObj?.capacity || 2}
                   value={guestCount}
                   onChange={(e) => setGuestCount(Math.min(6, Math.max(1, Number(e.target.value))))}
+                  className="h-10 bg-background"
                 />
               </div>
               <div>
@@ -465,8 +586,10 @@ export function BookingModal({
                 <Input
                   type="number"
                   min={1}
+                  max={6}
                   value={adults}
                   onChange={(e) => setAdults(Number(e.target.value))}
+                  className="h-10 bg-background"
                 />
               </div>
               <div>
@@ -474,8 +597,10 @@ export function BookingModal({
                 <Input
                   type="number"
                   min={0}
+                  max={4}
                   value={children}
                   onChange={(e) => setChildren(Number(e.target.value))}
+                  className="h-10 bg-background"
                 />
               </div>
             </div>
@@ -483,12 +608,17 @@ export function BookingModal({
             {/* Live Pricing Breakdown Card */}
             <div className="p-4 rounded-lg bg-secondary/50 border border-border space-y-3">
               <div className="flex justify-between items-center">
-                <h4 className="font-serif text-lg font-semibold text-foreground flex items-center gap-1.5">
-                  <Receipt className="w-4 h-4 text-accent" /> Price Calculation & Breakdown
-                </h4>
+                <div>
+                  <h4 className="font-serif text-base font-semibold text-foreground flex items-center gap-1.5">
+                    <Receipt className="w-4 h-4 text-accent" /> Booking Summary
+                  </h4>
+                  <p className="text-[11px] text-muted-foreground">
+                    {accommodationName} — <strong className="text-foreground">₹{currentNightlyRate.toLocaleString('en-IN')} / night</strong>
+                  </p>
+                </div>
                 <div className="flex items-center gap-2">
                   {loadingQuote ? (
-                    <span className="text-xs text-accent animate-pulse">Checking availability...</span>
+                    <span className="text-xs text-accent animate-pulse">Calculating rate...</span>
                   ) : quote ? (
                     quote.isAvailable ? (
                       <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30 text-[11px] font-medium">
@@ -513,43 +643,53 @@ export function BookingModal({
                 <div className="space-y-2 text-xs divide-y divide-border/60">
                   <div className="flex justify-between pt-1">
                     <span className="text-muted-foreground">
-                      Base Rate ({quote.nights} night{quote.nights > 1 ? 's' : ''})
+                      {accommodationName} (₹{(quote.nightlyRate || currentNightlyRate).toLocaleString('en-IN')} × {quote.nights} night{quote.nights > 1 ? 's' : ''})
                     </span>
-                    <span className="font-medium text-foreground">₹{quote.baseNightlySum?.toLocaleString()}</span>
+                    <span className="font-semibold text-foreground">
+                      ₹{(quote.roomCharges || quote.baseNightlySum)?.toLocaleString('en-IN')}
+                    </span>
                   </div>
 
                   {quote.extraGuestFee > 0 && (
                     <div className="flex justify-between pt-1">
                       <span className="text-muted-foreground">Extra Guest Fee</span>
-                      <span className="font-medium text-foreground">₹{quote.extraGuestFee?.toLocaleString()}</span>
+                      <span className="font-medium text-foreground">₹{quote.extraGuestFee?.toLocaleString('en-IN')}</span>
                     </div>
                   )}
 
-                  <div className="flex justify-between pt-1">
-                    <span className="text-muted-foreground">Cleaning & Sanitization Fee</span>
-                    <span className="font-medium text-foreground">₹{quote.cleaningFee?.toLocaleString()}</span>
-                  </div>
+                  {quote.cleaningFee > 0 && (
+                    <div className="flex justify-between pt-1">
+                      <span className="text-muted-foreground">Cleaning Fee</span>
+                      <span className="font-medium text-foreground">₹{quote.cleaningFee?.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
 
-                  <div className="flex justify-between pt-1">
-                    <span className="text-muted-foreground">Estate Staff & Butler Service Fee (5%)</span>
-                    <span className="font-medium text-foreground">₹{quote.serviceFee?.toLocaleString()}</span>
-                  </div>
+                  {quote.serviceFee > 0 && (
+                    <div className="flex justify-between pt-1">
+                      <span className="text-muted-foreground">Service Fee</span>
+                      <span className="font-medium text-foreground">₹{quote.serviceFee?.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
 
                   {quote.discountAmount > 0 && (
                     <div className="flex justify-between pt-1 text-emerald-700 font-medium">
                       <span>Coupon Discount ({quote.couponCode})</span>
-                      <span>- ₹{quote.discountAmount?.toLocaleString()}</span>
+                      <span>- ₹{quote.discountAmount?.toLocaleString('en-IN')}</span>
                     </div>
                   )}
 
-                  <div className="flex justify-between pt-1">
-                    <span className="text-muted-foreground">GST Taxes (18%)</span>
-                    <span className="font-medium text-foreground">₹{quote.taxAmount?.toLocaleString()}</span>
-                  </div>
+                  {quote.taxAmount > 0 && (
+                    <div className="flex justify-between pt-1">
+                      <span className="text-muted-foreground">Taxes</span>
+                      <span className="font-medium text-foreground">₹{quote.taxAmount?.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
 
-                  <div className="flex justify-between pt-2 text-sm font-bold text-foreground">
-                    <span>Total Estimated Stay Cost</span>
-                    <span className="text-accent text-base">₹{quote.totalAmount?.toLocaleString()} INR</span>
+                  <div className="flex justify-between pt-2.5 text-sm font-bold text-foreground">
+                    <span>Total Amount</span>
+                    <span className="text-primary text-base font-serif">
+                      ₹{(quote.totalAmount ?? quote.totalPayable)?.toLocaleString('en-IN')} INR
+                    </span>
                   </div>
                 </div>
               )}
@@ -565,7 +705,7 @@ export function BookingModal({
                     className="pl-8 text-xs bg-background h-8"
                   />
                 </div>
-                <Button size="sm" variant="outline" onClick={handleApplyCoupon} className="h-8 text-xs">
+                <Button size="sm" variant="outline" onClick={handleApplyCoupon} className="h-8 text-xs cursor-pointer">
                   Apply Code
                 </Button>
               </div>
@@ -573,10 +713,11 @@ export function BookingModal({
 
             <Button
               onClick={handleProceedToGuests}
-              disabled={!quote?.isValid}
-              className="w-full bg-primary hover:bg-primary/90 text-primary-foreground py-2.5"
+              disabled={loadingQuote || !checkIn || !checkOut || checkIn >= checkOut || (quote && quote.isAvailable === false)}
+              className="w-full bg-primary hover:bg-primary/90 text-primary-foreground py-2.5 cursor-pointer font-medium"
             >
-              Continue to Guest Information <ArrowRight className="w-4 h-4 ml-2" />
+              {loadingQuote ? 'Checking availability...' : 'Continue to Guest Information'}{' '}
+              <ArrowRight className="w-4 h-4 ml-2" />
             </Button>
           </div>
         )}
@@ -584,6 +725,22 @@ export function BookingModal({
         {/* STEP 2: GUEST INFORMATION */}
         {step === 2 && (
           <form onSubmit={handleProceedToPayment} className="space-y-4 pt-2">
+            {/* Selected Booking Summary Strip */}
+            <div className="p-3.5 rounded-lg bg-secondary/60 border border-border flex items-center justify-between text-xs">
+              <div>
+                <div className="font-semibold text-foreground">{accommodationName}</div>
+                <div className="text-muted-foreground mt-0.5">
+                  {checkIn} to {checkOut} ({quote?.nights || 1} nights) • ₹{(quote?.nightlyRate || currentNightlyRate).toLocaleString('en-IN')}/night
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-[10px] uppercase text-muted-foreground">Total Price</div>
+                <div className="font-serif font-bold text-sm text-primary">
+                  ₹{(quote?.totalAmount ?? quote?.totalPayable)?.toLocaleString('en-IN')}
+                </div>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label htmlFor="p-name" className="text-xs">Primary Guest Full Name *</Label>
@@ -593,6 +750,7 @@ export function BookingModal({
                   placeholder="e.g. Vikramaditya Sharma"
                   value={primaryName}
                   onChange={(e) => setPrimaryName(e.target.value)}
+                  className="bg-background"
                 />
               </div>
 
@@ -605,6 +763,7 @@ export function BookingModal({
                   placeholder="vikram@example.com"
                   value={primaryEmail}
                   onChange={(e) => setPrimaryEmail(e.target.value)}
+                  className="bg-background"
                 />
               </div>
             </div>
@@ -618,6 +777,7 @@ export function BookingModal({
                   placeholder="+91 98765 43210"
                   value={primaryPhone}
                   onChange={(e) => setPrimaryPhone(e.target.value)}
+                  className="bg-background"
                 />
               </div>
 
@@ -628,6 +788,7 @@ export function BookingModal({
                   placeholder="For smooth check-in verification"
                   value={idNumber}
                   onChange={(e) => setIdNumber(e.target.value)}
+                  className="bg-background"
                 />
               </div>
             </div>
@@ -640,52 +801,53 @@ export function BookingModal({
                 rows={2}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
+                className="bg-background"
               />
             </div>
 
             <div className="flex gap-3 pt-2">
-              <Button type="button" variant="outline" onClick={() => setStep(1)} className="w-1/3">
+              <Button type="button" variant="outline" onClick={() => setStep(1)} className="w-1/3 cursor-pointer">
                 <ArrowLeft className="w-4 h-4 mr-1" /> Back
               </Button>
               <Button
                 type="submit"
                 disabled={processingPayment}
-                className="w-2/3 bg-primary hover:bg-primary/90 text-primary-foreground"
+                className="w-2/3 bg-primary hover:bg-primary/90 text-primary-foreground cursor-pointer font-medium"
               >
-                {processingPayment ? 'Securing Hold...' : 'Proceed to Payment Lock'}
+                {processingPayment ? 'Securing Hold...' : 'Proceed to Payment'}
               </Button>
             </div>
           </form>
         )}
 
-        {/* STEP 3: UNIFIED PAYMENT GATEWAY (RAZORPAY / STRIPE / MOCK) */}
+        {/* STEP 3: UNIFIED PAYMENT GATEWAY (RAZORPAY / STRIPE) */}
         {step === 3 && createdBooking && (
           <div className="space-y-4 pt-2">
             <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-md text-amber-900 dark:text-amber-200 text-xs flex items-center gap-2">
               <Lock className="w-4 h-4 text-amber-600 shrink-0" />
               <span>
-                <strong>Temporary Hold Active:</strong> Room locked for 15 minutes under reference{' '}
+                <strong>Temporary Hold Active:</strong> Accommodation locked for 15 minutes under reference{' '}
                 <span className="font-bold underline">{createdBooking.referenceCode}</span>.
               </span>
             </div>
 
-            <div className="p-4 bg-muted/40 rounded-lg space-y-2 text-xs">
+            <div className="p-4 bg-muted/40 rounded-lg space-y-2 text-xs border border-border/80">
               <div className="flex justify-between font-medium">
-                <span>Estate Stay Total</span>
-                <span className="text-accent text-sm font-bold">₹{createdBooking.totalAmount?.toLocaleString()} INR</span>
+                <span>{accommodationName} ({createdBooking.nights} nights)</span>
+                <span className="text-primary text-base font-bold font-serif">₹{createdBooking.totalAmount?.toLocaleString('en-IN')} INR</span>
               </div>
               <p className="text-muted-foreground">
-                Dates: {checkIn} to {checkOut} ({createdBooking.nights} nights)
+                Dates: {checkIn} to {checkOut} • Rate: ₹{(quote?.nightlyRate || currentNightlyRate).toLocaleString('en-IN')} / night
               </p>
             </div>
 
             <div className="space-y-2">
-              <Label className="text-xs font-semibold">Select Payment Gateway</Label>
+              <Label className="text-xs font-semibold">Select Payment Method</Label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => setPaymentGateway('razorpay')}
-                  className={`p-3 text-left rounded-md border text-xs transition-colors flex flex-col gap-1 ${
+                  className={`p-3 text-left rounded-md border text-xs transition-colors flex flex-col gap-1 cursor-pointer ${
                     paymentGateway === 'razorpay'
                       ? 'border-primary bg-primary/10 text-foreground font-semibold shadow-sm'
                       : 'border-border text-muted-foreground hover:bg-muted'
@@ -694,13 +856,13 @@ export function BookingModal({
                   <span className="flex items-center gap-1.5 font-bold text-foreground">
                     <Sparkles className="w-3.5 h-3.5 text-accent" /> Razorpay
                   </span>
-                  <span className="text-[10px] text-muted-foreground">UPI (GPay/PhonePe/Paytm), Cards, NetBanking</span>
+                  <span className="text-[10px] text-muted-foreground">UPI (GPay / PhonePe / Paytm), Cards, NetBanking</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setPaymentGateway('stripe')}
-                  className={`p-3 text-left rounded-md border text-xs transition-colors flex flex-col gap-1 ${
+                  className={`p-3 text-left rounded-md border text-xs transition-colors flex flex-col gap-1 cursor-pointer ${
                     paymentGateway === 'stripe'
                       ? 'border-primary bg-primary/10 text-foreground font-semibold shadow-sm'
                       : 'border-border text-muted-foreground hover:bg-muted'
@@ -709,7 +871,7 @@ export function BookingModal({
                   <span className="flex items-center gap-1.5 font-bold text-foreground">
                     <CreditCard className="w-3.5 h-3.5 text-accent" /> Stripe
                   </span>
-                  <span className="text-[10px] text-muted-foreground">International Credit / Debit Cards</span>
+                  <span className="text-[10px] text-muted-foreground">International & Domestic Cards</span>
                 </button>
               </div>
             </div>
@@ -717,19 +879,17 @@ export function BookingModal({
             <Button
               onClick={handlePayAndConfirm}
               disabled={processingPayment}
-              className="w-full bg-emerald-700 hover:bg-emerald-800 text-white py-3 font-semibold text-sm shadow-sm"
+              className="w-full bg-primary hover:bg-accent text-primary-foreground py-3.5 font-semibold text-sm shadow-sm cursor-pointer"
             >
               {processingPayment
                 ? 'Processing & Verifying Payment...'
-                : paymentGateway === 'razorpay'
-                ? `Pay ₹${createdBooking.totalAmount?.toLocaleString()} via Razorpay`
-                : `Pay ₹${createdBooking.totalAmount?.toLocaleString()} via Stripe`}
+                : `Pay ₹${createdBooking.totalAmount?.toLocaleString('en-IN')} via ${paymentGateway === 'razorpay' ? 'Razorpay' : 'Stripe'}`}
             </Button>
 
             <button
               type="button"
               onClick={handleReleaseHold}
-              className="text-[11px] text-muted-foreground hover:text-foreground text-center w-full block transition-colors underline pt-1"
+              className="text-[11px] text-muted-foreground hover:text-foreground text-center w-full block transition-colors underline pt-1 cursor-pointer"
             >
               Cancel reservation & release temporary hold
             </button>
@@ -746,7 +906,7 @@ export function BookingModal({
             <div className="space-y-1">
               <h3 className="font-serif text-2xl font-bold text-foreground">Stay Confirmed!</h3>
               <p className="text-sm text-muted-foreground">
-                Your reservation at Suroor Villa is official. Server payment verified.
+                Your reservation at Suroor Villa is official. Payment verified.
               </p>
               <p className="text-xs font-mono font-bold text-accent pt-1">
                 Reference Code: {confirmedData.booking.referenceCode}
@@ -757,6 +917,10 @@ export function BookingModal({
               <div className="flex justify-between border-b border-border/60 pb-1 font-semibold">
                 <span>Invoice Number</span>
                 <span>{confirmedData.invoice?.invoiceNumber}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Accommodation</span>
+                <span>{accommodationName}</span>
               </div>
               <div className="flex justify-between">
                 <span>Primary Guest</span>
@@ -772,7 +936,7 @@ export function BookingModal({
               </div>
               <div className="flex justify-between font-bold text-sm pt-2 text-foreground">
                 <span>Total Amount Paid</span>
-                <span className="text-emerald-700">₹{confirmedData.booking.totalAmount?.toLocaleString()} INR</span>
+                <span className="text-emerald-700">₹{confirmedData.booking.totalAmount?.toLocaleString('en-IN')} INR</span>
               </div>
             </div>
 
@@ -781,11 +945,11 @@ export function BookingModal({
                 href={`/api/booking/${confirmedData.booking.id}/invoice`}
                 target="_blank"
                 rel="noreferrer"
-                className="flex-1 inline-flex items-center justify-center border border-input bg-background hover:bg-accent hover:text-accent-foreground text-xs font-medium h-9 rounded-md"
+                className="flex-1 inline-flex items-center justify-center border border-input bg-background hover:bg-accent hover:text-accent-foreground text-xs font-medium h-9 rounded-md cursor-pointer"
               >
                 <Download className="w-4 h-4 mr-1.5" /> Official Tax Invoice (PDF)
               </a>
-              <Button className="flex-1 bg-primary hover:bg-primary/90 text-primary-foreground" onClick={onClose}>
+              <Button className="flex-1 bg-primary hover:bg-primary/90 text-primary-foreground cursor-pointer" onClick={onClose}>
                 Done
               </Button>
             </div>
