@@ -1,0 +1,8 @@
+{
+  "name": "Suroor Villa",
+  "description": "A private three-bedroom luxury villa retreat in the pine valleys of Kashmir",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

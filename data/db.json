@@ -1,0 +1,373 @@
+{
+  "users": [
+    {
+      "id": "usr-admin-101",
+      "email": "admin@suroorvilla.in",
+      "passwordHash": "$2b$10$w4r6Wp8OaG1O9Qf77c8eAe3m5g6N8v9w0x1y2z3a4b5c6d7e8f9g0",
+      "fullName": "Suroor Villa Estate Manager",
+      "phone": "+91 98765 43210",
+      "isVerified": true,
+      "role": "ADMIN",
+      "createdAt": "2026-08-18T12:29:36.856Z",
+      "updatedAt": "2026-08-18T12:29:36.856Z"
+    },
+    {
+      "id": "usr-guest-101",
+      "email": "guest@example.com",
+      "passwordHash": "$2b$10$w4r6Wp8OaG1O9Qf77c8eAe3m5g6N8v9w0x1y2z3a4b5c6d7e8f9g0",
+      "fullName": "Vikramaditya Sharma",
+      "phone": "+91 98111 22334",
+      "isVerified": true,
+      "role": "CUSTOMER",
+      "createdAt": "2026-08-18T12:29:36.856Z",
+      "updatedAt": "2026-08-18T12:29:36.856Z"
+    }
+  ],
+  "villas": [
+    {
+      "id": "villa-suroor-main",
+      "name": "Suroor Villa",
+      "slug": "suroor-villa",
+      "description": "A private three-bedroom sanctuary set amid the pine valleys of Kashmir. Floor-to-ceiling glass frames the Himalayan ridge, while interiors balance Kashmiri craft with quiet, modern comfort.",
+      "tagline": "A private three-bedroom retreat in the pine valleys of Kashmir",
+      "maxGuests": 6,
+      "bedroomsCount": 3,
+      "bathroomsCount": 3,
+      "basePrice": 45000,
+      "cleaningFee": 3500,
+      "serviceFee": 2250,
+      "taxRate": 18,
+      "address": "Gulmarg Road, Tangmarg",
+      "city": "Gulmarg",
+      "state": "Jammu & Kashmir",
+      "country": "India",
+      "createdAt": "2026-08-18T12:29:36.856Z",
+      "updatedAt": "2026-08-18T12:29:36.856Z"
+    }
+  ],
+  "rooms": [
+    {
+      "id": "room-1",
+      "villaId": "villa-suroor-main",
+      "name": "The Master Suite",
+      "type": "Master Suite",
+      "description": "King bed, private balcony, fireplace & soaking tub with mountain views",
+      "capacity": 2,
+      "bedType": "King bed",
+      "pricePerNight": 18000,
+      "imageUrl": "/images/bedroom/bedroom1.webp",
+      "isAvailable": true,
+      "createdAt": "2026-08-18T12:29:36.856Z",
+      "updatedAt": "2026-08-18T12:29:36.856Z"
+    },
+    {
+      "id": "room-2",
+      "villaId": "villa-suroor-main",
+      "name": "The Pine Suite",
+      "type": "Deluxe Suite",
+      "description": "Deluxe king room framed by pine forest views and marble bath",
+      "capacity": 2,
+      "bedType": "King bed",
+      "pricePerNight": 15000,
+      "imageUrl": "/images/bedroom/bedroom2.jpg",
+      "isAvailable": true,
+      "createdAt": "2026-08-18T12:29:36.856Z",
+      "updatedAt": "2026-08-18T12:29:36.856Z"
+    },
+    {
+      "id": "room-3",
+      "villaId": "villa-suroor-main",
+      "name": "The Garden Room",
+      "type": "Garden Suite",
+      "description": "Flexible twin-to-king room opening onto the herb garden",
+      "capacity": 2,
+      "bedType": "Twin / King",
+      "pricePerNight": 12000,
+      "imageUrl": "/images/bedroom/bedroom_(2).jpg",
+      "isAvailable": true,
+      "createdAt": "2026-08-18T12:29:36.856Z",
+      "updatedAt": "2026-08-18T12:29:36.856Z"
+    }
+  ],
+  "amenities": [],
+  "gallery": [],
+  "bookings": [
+    {
+      "id": "bk-1001",
+      "referenceCode": "SUR-2026-8819",
+      "userId": "usr-guest-101",
+      "villaId": "villa-suroor-main",
+      "roomId": null,
+      "checkIn": "2026-09-01T14:00:00.000Z",
+      "checkOut": "2026-09-05T11:00:00.000Z",
+      "nights": 4,
+      "guestCount": 4,
+      "adults": 4,
+      "children": 0,
+      "baseAmount": 180000,
+      "extraGuestFee": 0,
+      "cleaningFee": 3500,
+      "serviceFee": 9000,
+      "discountAmount": 10000,
+      "taxAmount": 32850,
+      "totalAmount": 215350,
+      "currency": "INR",
+      "status": "CONFIRMED",
+      "paymentStatus": "PAID",
+      "notes": "Anniversary retreat in Kashmir.",
+      "internalNotes": "VIP guest. Complementary Kahwa tea service requested.",
+      "couponId": "cpn-1",
+      "createdAt": "2026-08-18T12:29:36.856Z",
+      "updatedAt": "2026-08-18T12:29:36.856Z"
+    },
+    {
+      "id": "bk-1787131789425",
+      "referenceCode": "SUR-2026-5405",
+      "userId": null,
+      "villaId": "villa-suroor-main",
+      "roomId": null,
+      "checkIn": "2026-09-10",
+      "checkOut": "2026-09-13",
+      "nights": 3,
+      "guestCount": 4,
+      "adults": 3,
+      "children": 1,
+      "baseAmount": 141750,
+      "extraGuestFee": 0,
+      "cleaningFee": 3500,
+      "serviceFee": 7088,
+      "discountAmount": 0,
+      "taxAmount": 27421,
+      "totalAmount": 179759,
+      "currency": "INR",
+      "status": "CONFIRMED",
+      "paymentStatus": "PAID",
+      "notes": null,
+      "internalNotes": null,
+      "lockExpiresAt": null,
+      "couponId": null,
+      "createdAt": "2026-08-19T09:29:49.425Z",
+      "updatedAt": "2026-08-19T09:30:22.326Z",
+      "paymentTransactionId": "DEMO-TXN-1787131822326-2420",
+      "paymentGateway": "DEMO_DEV_MOCK",
+      "paidAmount": 179759
+    }
+  ],
+  "guests": [
+    {
+      "id": "gst-1001",
+      "bookingId": "bk-1001",
+      "fullName": "Vikramaditya Sharma",
+      "email": "guest@example.com",
+      "phone": "+91 98111 22334",
+      "isPrimary": true,
+      "createdAt": "2026-08-18T12:29:36.856Z"
+    },
+    {
+      "id": "gst-1787131789425-1",
+      "bookingId": "bk-1787131789425",
+      "fullName": "bilal AHMAD",
+      "email": "healthmart445@gmail.com",
+      "phone": "8082760808",
+      "idType": null,
+      "idNumber": null,
+      "isPrimary": true,
+      "createdAt": "2026-08-19T09:29:49.425Z"
+    }
+  ],
+  "availabilities": [
+    {
+      "id": "av-1",
+      "villaId": "villa-suroor-main",
+      "date": "2026-10-15",
+      "isBlocked": true,
+      "notes": "Scheduled Heating & Chimney Maintenance"
+    },
+    {
+      "id": "av-2",
+      "villaId": "villa-suroor-main",
+      "date": "2026-10-16",
+      "isBlocked": true,
+      "notes": "Scheduled Heating & Chimney Maintenance"
+    },
+    {
+      "id": "av-3",
+      "villaId": "villa-suroor-main",
+      "date": "2026-10-17",
+      "isBlocked": true,
+      "notes": "Scheduled Heating & Chimney Maintenance"
+    }
+  ],
+  "pricingRules": [
+    {
+      "id": "rule-base-1",
+      "villaId": "villa-suroor-main",
+      "name": "Standard Nightly Rate",
+      "ruleType": "BASE",
+      "priority": 1,
+      "minStayNights": 2,
+      "extraGuestFee": 2500,
+      "isActive": true
+    },
+    {
+      "id": "rule-weekend-1",
+      "villaId": "villa-suroor-main",
+      "name": "Weekend Surcharge",
+      "ruleType": "WEEKEND",
+      "priority": 10,
+      "priceMultiplier": 1.15,
+      "minStayNights": 2,
+      "isWeekendRule": true,
+      "isActive": true
+    },
+    {
+      "id": "rule-season-winter",
+      "villaId": "villa-suroor-main",
+      "name": "Kashmir Winter Snow Peak Season",
+      "ruleType": "SEASONAL",
+      "priority": 20,
+      "startDate": "2026-12-15",
+      "endDate": "2027-02-28",
+      "priceMultiplier": 1.3,
+      "minStayNights": 3,
+      "isActive": true
+    }
+  ],
+  "coupons": [
+    {
+      "id": "cpn-1",
+      "code": "WELCOME10",
+      "description": "10% OFF Welcome discount for first-time guests",
+      "discountType": "PERCENTAGE",
+      "discountValue": 10,
+      "minBookingValue": 40000,
+      "maxDiscount": 10000,
+      "validFrom": "2026-01-01",
+      "validUntil": "2026-12-31",
+      "usageLimit": 100,
+      "usedCount": 5,
+      "isActive": true
+    },
+    {
+      "id": "cpn-2",
+      "code": "KASHMIR5000",
+      "description": "Flat ₹5,000 off on stays of 3 nights or more",
+      "discountType": "FIXED",
+      "discountValue": 5000,
+      "minBookingValue": 80000,
+      "validFrom": "2026-01-01",
+      "validUntil": "2026-12-31",
+      "usageLimit": 50,
+      "usedCount": 2,
+      "isActive": true
+    }
+  ],
+  "payments": [
+    {
+      "id": "pay-1001",
+      "bookingId": "bk-1001",
+      "transactionId": "TXN-SUR-2026-0901",
+      "amount": 215350,
+      "currency": "INR",
+      "method": "CREDIT_CARD",
+      "status": "COMPLETED",
+      "createdAt": "2026-08-18T12:29:36.856Z"
+    },
+    {
+      "id": "pay-1787131822326",
+      "bookingId": "bk-1787131789425",
+      "transactionId": "DEMO-TXN-1787131822326-2420",
+      "amount": 179759,
+      "currency": "INR",
+      "method": "DEMO_DEV_MOCK",
+      "status": "COMPLETED",
+      "gatewayResponse": "{\"bookingId\":\"bk-1787131789425\",\"gateway\":\"mock\",\"stripePaymentIntentId\":\"DEMO-ORD-1787131821886-7308\"}",
+      "createdAt": "2026-08-19T09:30:22.326Z"
+    }
+  ],
+  "invoices": [
+    {
+      "id": "inv-1001",
+      "invoiceNumber": "INV-2026-001",
+      "bookingId": "bk-1001",
+      "subtotal": 182500,
+      "taxAmount": 32850,
+      "totalAmount": 215350,
+      "status": "PAID",
+      "issuedAt": "2026-08-18T12:29:36.856Z",
+      "dueDate": "2026-08-18T12:29:36.856Z",
+      "createdAt": "2026-08-18T12:29:36.856Z"
+    },
+    {
+      "id": "inv-1787131822326",
+      "invoiceNumber": "INV-2026-527",
+      "bookingId": "bk-1787131789425",
+      "subtotal": 152338,
+      "taxAmount": 27421,
+      "totalAmount": 179759,
+      "status": "PAID",
+      "issuedAt": "2026-08-19T09:30:22.326Z",
+      "dueDate": "2026-08-19T09:30:22.326Z",
+      "createdAt": "2026-08-19T09:30:22.326Z"
+    }
+  ],
+  "cancellations": [],
+  "refunds": [],
+  "reviews": [
+    {
+      "id": "rev-1",
+      "villaId": "villa-suroor-main",
+      "guestName": "Priya & Rohan Malhotra",
+      "rating": 5,
+      "comment": "Suroor Villa is an absolute paradise. Waking up to the morning mist over the pine valley with fresh Kashmir Kahwa prepared by Chef Ghulam was unforgettable.",
+      "isVerified": true,
+      "isApproved": true,
+      "createdAt": "2026-07-20T10:00:00.000Z"
+    },
+    {
+      "id": "rev-2",
+      "villaId": "villa-suroor-main",
+      "guestName": "Karan Mehra",
+      "rating": 5,
+      "comment": "The floor-to-ceiling glass in the Master Suite gives you front-row Himalayan views. Immaculate hospitality and high-speed Wi-Fi even in the mountains.",
+      "isVerified": true,
+      "isApproved": true,
+      "createdAt": "2026-08-01T14:30:00.000Z"
+    }
+  ],
+  "notifications": [],
+  "contactMessages": [],
+  "auditLogs": [
+    {
+      "id": "log-1787131822326-290",
+      "userId": "GUEST",
+      "action": "CONFIRM_PAYMENT",
+      "entity": "Booking",
+      "entityId": "bk-1787131789425",
+      "details": "Payment ₹179759 confirmed via DEMO_DEV_MOCK. Transaction: DEMO-TXN-1787131822326-2420",
+      "ipAddress": "127.0.0.1",
+      "createdAt": "2026-08-19T09:30:22.326Z"
+    },
+    {
+      "id": "log-1787131789425-642",
+      "userId": "GUEST",
+      "action": "CREATE_BOOKING_HOLD",
+      "entity": "Booking",
+      "entityId": "bk-1787131789425",
+      "details": "Created reservation hold SUR-2026-5405 for bilal AHMAD (2026-09-10 to 2026-09-13)",
+      "ipAddress": "127.0.0.1",
+      "createdAt": "2026-08-19T09:29:49.425Z"
+    },
+    {
+      "id": "log-1",
+      "userId": "usr-admin-101",
+      "action": "INITIALIZE_SYSTEM",
+      "entity": "System",
+      "entityId": "suroor-system",
+      "details": "Initial booking infrastructure and seed database initialized.",
+      "ipAddress": "127.0.0.1",
+      "createdAt": "2026-08-18T12:29:36.856Z"
+    }
+  ],
+  "passwordResetTokens": []
+}
