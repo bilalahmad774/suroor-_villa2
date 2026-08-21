@@ -286,14 +286,16 @@ export function BookingModal({
           throw new Error('Razorpay SDK failed to load. Please check internet connection.');
         }
 
-        const options = {
-          key: orderData.keyId,
-          amount: orderData.amount, // In paise
-          currency: orderData.currency,
+        const razorpayKey = orderData.keyId || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || siteConfig.payment.razorpayKeyId;
+
+        const options: any = {
+          key: razorpayKey,
+          order_id: orderData.orderId,
+          amount: orderData.amount, // In paise, matches order.amount
+          currency: orderData.currency || 'INR',
           name: siteConfig.name,
           description: `Stay Reservation (${createdBooking.referenceCode})`,
           image: '/images/hero/hero.webp',
-          order_id: orderData.orderId,
           prefill: {
             name: primaryName,
             email: primaryEmail,
@@ -317,45 +319,14 @@ export function BookingModal({
               toast.info('Payment window closed. Your 15-minute reservation hold remains active.');
             },
           },
-          config: {
-            display: {
-              blocks: {
-                upi: {
-                  name: 'Pay via UPI (GPay / PhonePe / Paytm / BHIM)',
-                  instruments: [
-                    {
-                      method: 'upi',
-                    },
-                  ],
-                },
-                other: {
-                  name: 'Cards & NetBanking',
-                  instruments: [
-                    {
-                      method: 'card',
-                    },
-                    {
-                      method: 'netbanking',
-                    },
-                    {
-                      method: 'wallet',
-                    },
-                  ],
-                },
-              },
-              sequence: ['block.upi', 'block.other'],
-              preferences: {
-                show_default_blocks: true,
-              },
-            },
-          },
         };
 
         const rzp = new (window as any).Razorpay(options);
         rzp.on('payment.failed', (response: any) => {
           setProcessingPayment(false);
+          console.error('Razorpay Payment Failed Event:', response.error);
           toast.error(
-            `Payment declined: ${response.error?.description || 'Transaction failed. Your hold remains active.'}`
+            `Payment declined: ${response.error?.description || response.error?.reason || 'Transaction failed. Your hold remains active.'}`
           );
         });
         rzp.open();

@@ -105,14 +105,16 @@ export const siteConfig = {
   payment: {
     isTestMode: false,
     currency: 'INR',
-    razorpayKeyId:
+    razorpayKeyId: (
       process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID ||
       process.env.RAZORPAY_KEY_ID ||
-      '',
-    stripePublishableKey:
+      ''
+    ).trim(),
+    stripePublishableKey: (
       process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ||
       process.env.STRIPE_PUBLISHABLE_KEY ||
-      '',
+      ''
+    ).trim(),
     modeLabel: 'Razorpay Secure Payment Active',
     demoNotice: '',
   },

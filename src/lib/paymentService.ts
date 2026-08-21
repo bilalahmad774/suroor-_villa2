@@ -81,17 +81,21 @@ export class PaymentService {
 
     // A. RAZORPAY GATEWAY (LIVE / PRODUCTION READY)
     if (gateway === 'razorpay') {
-      const keyId = process.env.RAZORPAY_KEY_ID || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
-      const keySecret = process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_SECRET;
+      const keyId = (process.env.RAZORPAY_KEY_ID || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '').trim();
+      const keySecret = (process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_SECRET || '').trim();
 
       if (!keyId || !keySecret) {
+        console.error('[PaymentService] Razorpay Error: Missing credentials on server', {
+          keyIdConfigured: Boolean(keyId),
+          keySecretConfigured: Boolean(keySecret),
+        });
         return {
           success: false,
           gateway: 'razorpay',
           orderId: '',
-          amount: params.amount,
+          amount: Math.round(params.amount * 100),
           currency: params.currency || 'INR',
-          error: 'Razorpay credentials (RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET) are not configured in environment variables.',
+          error: 'Razorpay credentials (RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET) are not configured in Vercel environment variables.',
         };
       }
 
@@ -123,20 +127,40 @@ export class PaymentService {
           success: true,
           gateway: 'razorpay',
           orderId: order.id,
-          amount: params.amount,
-          currency: params.currency || 'INR',
+          amount: order.amount || options.amount, // Explicit amount in paise matching order
+          currency: order.currency || params.currency || 'INR',
           keyId: keyId,
         };
       } catch (err: any) {
-        console.error('Razorpay Order Creation Error:', err);
-        const errMsg = err.error?.description || err.message || 'Razorpay order creation failed.';
+        const statusCode = err.statusCode || err.status || 500;
+        const errCode = err.error?.code || 'UNKNOWN_ERROR';
+        const errDesc = err.error?.description || err.message || 'Razorpay order creation failed.';
+        
+        // Safe server-side logging without exposing the secret
+        console.error('[PaymentService] Razorpay Order Creation Error:', {
+          statusCode,
+          code: errCode,
+          description: errDesc,
+          keyMode: keyId.startsWith('rzp_live_') ? 'LIVE' : keyId.startsWith('rzp_test_') ? 'TEST' : 'CUSTOM',
+          keyIdPrefix: keyId.substring(0, 8),
+          keyIdLength: keyId.length,
+          secretConfigured: Boolean(keySecret),
+          secretLength: keySecret.length,
+        });
+
+        let userFacingError = errDesc;
+        if (statusCode === 401 || errDesc.toLowerCase().includes('authentication failed')) {
+          userFacingError =
+            'Razorpay authentication failed. Please verify that RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in Vercel Environment Variables belong to the same mode (both Live or both Test) and contain no extra spaces.';
+        }
+
         return {
           success: false,
           gateway: 'razorpay',
           orderId: '',
-          amount: params.amount,
+          amount: Math.round(params.amount * 100),
           currency: params.currency || 'INR',
-          error: errMsg,
+          error: userFacingError,
         };
       }
     }
@@ -250,7 +274,7 @@ export class PaymentService {
         };
       }
 
-      const secret = process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_SECRET;
+      const secret = (process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_SECRET || '').trim();
       if (!secret) {
         return {
           success: false,
@@ -270,7 +294,7 @@ export class PaymentService {
         .digest('hex');
 
       if (expectedSignature !== razorpaySignature) {
-        console.error('[RAZORPAY VERIFY ERROR] Signature mismatch between expected and received.');
+        console.error('[PaymentService] Razorpay signature mismatch between expected and received.');
         return {
           success: false,
           transactionId: razorpayPaymentId,
@@ -286,7 +310,7 @@ export class PaymentService {
 
       let verifiedMethod = 'RAZORPAY';
       try {
-        const keyId = process.env.RAZORPAY_KEY_ID || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
+        const keyId = (process.env.RAZORPAY_KEY_ID || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '').trim();
         if (keyId && secret) {
           // eslint-disable-next-line
           const Razorpay = require('razorpay');
@@ -401,8 +425,8 @@ export class PaymentService {
 
   // 3. SERVER-SIDE REFUND PROCESSOR
   static async processRefund(params: RefundParams): Promise<RefundResult> {
-    const keyId = process.env.RAZORPAY_KEY_ID || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
-    const keySecret = process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_SECRET;
+    const keyId = (process.env.RAZORPAY_KEY_ID || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '').trim();
+    const keySecret = (process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_SECRET || '').trim();
     const idempotencyKey = params.idempotencyKey || `refund_${params.bookingId}_${params.transactionId}`;
 
     if (this.isProcessed(idempotencyKey)) {
