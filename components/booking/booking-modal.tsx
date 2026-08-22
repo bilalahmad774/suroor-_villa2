@@ -108,9 +108,10 @@ export function BookingModal({
 
   // Fetch Live Server Quote
   const fetchQuote = useCallback(
-    async (couponToApply = appliedCoupon, signal?: AbortSignal) => {
+    async (couponToApply = appliedCoupon) => {
       if (!checkIn || !checkOut || checkIn >= checkOut) {
         setQuote(null);
+        setLoadingQuote(false);
         return;
       }
       setLoadingQuote(true);
@@ -119,7 +120,6 @@ export function BookingModal({
         const res = await fetch('/api/booking/quote', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          signal,
           body: JSON.stringify({
             villaId: 'villa-suroor-main',
             checkIn,
@@ -132,32 +132,24 @@ export function BookingModal({
 
         const data = await res.json().catch(() => null);
         if (!res.ok || !data) {
-          if (!signal?.aborted) {
-            setQuote({
-              isValid: false,
-              isAvailable: false,
-              validationError: data?.error || 'Failed to calculate pricing quote.',
-              message: data?.error || 'Failed to calculate pricing quote.',
-            });
-          }
-          return;
-        }
-        if (!signal?.aborted) {
-          setQuote(data);
-        }
-      } catch (err: any) {
-        if (err?.name !== 'AbortError') {
           setQuote({
             isValid: false,
             isAvailable: false,
-            validationError: err?.message || 'Error updating price.',
-            message: err?.message || 'Error updating price.',
+            validationError: data?.error || 'Failed to calculate pricing quote.',
+            message: data?.error || 'Failed to calculate pricing quote.',
           });
+          return;
         }
+        setQuote(data);
+      } catch (err: any) {
+        setQuote({
+          isValid: false,
+          isAvailable: false,
+          validationError: err?.message || 'Error updating price.',
+          message: err?.message || 'Error updating price.',
+        });
       } finally {
-        if (!signal?.aborted) {
-          setLoadingQuote(false);
-        }
+        setLoadingQuote(false);
       }
     },
     [appliedCoupon, checkIn, checkOut, guestCount, selectedRoomId]
@@ -177,14 +169,68 @@ export function BookingModal({
   }, [isOpen, initialCheckIn, initialCheckOut, initialRoomId]);
 
   useEffect(() => {
-    if (isOpen) {
-      const controller = new AbortController();
-      fetchQuote(appliedCoupon, controller.signal);
-      return () => {
-        controller.abort();
-      };
-    }
-  }, [isOpen, fetchQuote, appliedCoupon]);
+    if (!isOpen) return;
+    let isCurrent = true;
+    const controller = new AbortController();
+
+    const run = async () => {
+      if (!checkIn || !checkOut || checkIn >= checkOut) {
+        setQuote(null);
+        setLoadingQuote(false);
+        return;
+      }
+      setLoadingQuote(true);
+      try {
+        const roomId = selectedRoomId === 'entire-villa' ? undefined : selectedRoomId;
+        const res = await fetch('/api/booking/quote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            villaId: 'villa-suroor-main',
+            checkIn,
+            checkOut,
+            guestCount,
+            couponCode: appliedCoupon || undefined,
+            roomId,
+          }),
+        });
+
+        const data = await res.json().catch(() => null);
+        if (!isCurrent) return;
+
+        if (!res.ok || !data) {
+          setQuote({
+            isValid: false,
+            isAvailable: false,
+            validationError: data?.error || 'Failed to calculate pricing quote.',
+            message: data?.error || 'Failed to calculate pricing quote.',
+          });
+          return;
+        }
+        setQuote(data);
+      } catch (err: any) {
+        if (!isCurrent || err?.name === 'AbortError') return;
+        setQuote({
+          isValid: false,
+          isAvailable: false,
+          validationError: err?.message || 'Error updating price.',
+          message: err?.message || 'Error updating price.',
+        });
+      } finally {
+        if (isCurrent) {
+          setLoadingQuote(false);
+        }
+      }
+    };
+
+    run();
+
+    return () => {
+      isCurrent = false;
+      controller.abort();
+    };
+  }, [isOpen, checkIn, checkOut, guestCount, selectedRoomId, appliedCoupon]);
 
   const handleApplyCoupon = () => {
     if (!couponCode.trim()) return;

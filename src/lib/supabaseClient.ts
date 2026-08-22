@@ -1,6 +1,18 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
+function sanitizeUrl(rawUrl?: string): string {
+  if (!rawUrl) return 'https://placeholder.supabase.co';
+  const trimmed = rawUrl.trim();
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.origin;
+  } catch {
+    return trimmed.replace(/\/+$/, '').replace(/\/rest\/v1\/?$/, '');
+  }
+}
+
+const rawSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseUrl = sanitizeUrl(rawSupabaseUrl);
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-key';
 
 if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
