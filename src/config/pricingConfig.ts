@@ -1,16 +1,6 @@
 /**
- * Centralized Pricing Configuration for Suroor Villa
- * Single source of truth for accommodation rates and pricing logic.
- *
- * To change prices, update this file or update via the Admin Settings Dashboard.
- * Changing prices here automatically updates:
- * - Room cards
- * - Room details modal
- * - Reservation/booking page
- * - Booking modal
- * - Guest Information step
- * - Payment gateway amount
- * - Admin booking records & invoices
+ * Centralized Pricing Type Definitions & Mapping Helpers for Suroor Villa.
+ * Authoritative rates are stored in the Supabase public.accommodations table (base_price_per_night).
  */
 
 export interface PricingConfig {
@@ -22,39 +12,37 @@ export interface PricingConfig {
 }
 
 export const defaultPricingConfig: PricingConfig = {
-  roomPricePerNight: 15000,
-  entireVillaPricePerNight: 30000,
+  roomPricePerNight: 0,
+  entireVillaPricePerNight: 0,
   currency: 'INR',
   currencySymbol: '₹',
-  roomPrices: {
-    'room-1': 15000, // The Master Suite
-    'room-2': 15000, // The Pine Suite
-    'room-3': 15000, // The Garden Room
-  },
+  roomPrices: {},
 };
 
 /**
- * Get room price per night for a given room ID, falling back to centralized room price.
+ * Get room price per night for a given room ID from a loaded PricingConfig object.
  */
-export function getRoomPrice(roomId?: string, config: PricingConfig = defaultPricingConfig): number {
-  if (!roomId || roomId === 'entire-villa') {
-    return config.entireVillaPricePerNight;
+export function getRoomPrice(roomId?: string, config?: PricingConfig): number {
+  if (!config) return 0;
+  if (!roomId || roomId === 'entire-villa' || roomId === 'villa-suroor-main') {
+    return config.entireVillaPricePerNight || config.roomPrices['entire-villa'] || 0;
   }
-  return config.roomPrices[roomId] || config.roomPricePerNight;
+  return config.roomPrices[roomId] || config.roomPricePerNight || 0;
 }
 
 /**
- * Get entire villa price per night.
+ * Get entire villa price per night from a loaded PricingConfig object.
  */
-export function getEntireVillaPrice(config: PricingConfig = defaultPricingConfig): number {
-  return config.entireVillaPricePerNight;
+export function getEntireVillaPrice(config?: PricingConfig): number {
+  if (!config) return 0;
+  return config.entireVillaPricePerNight || config.roomPrices['entire-villa'] || 0;
 }
 
 /**
  * Format human-readable accommodation title.
  */
 export function getAccommodationTitle(roomId?: string): string {
-  if (!roomId || roomId === 'entire-villa') {
+  if (!roomId || roomId === 'entire-villa' || roomId === 'villa-suroor-main') {
     return 'Entire Villa';
   }
   switch (roomId) {

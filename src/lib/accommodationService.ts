@@ -12,76 +12,35 @@ export interface AccommodationRecord {
   updated_at?: string;
 }
 
-export const DEFAULT_ACCOMMODATIONS: AccommodationRecord[] = [
-  {
-    id: 'entire-villa',
-    name: 'Entire Villa (All 3 Suites)',
-    type: 'buyout',
-    base_price_per_night: 30000,
-    currency: 'INR',
-    capacity: 6,
-    is_active: true,
-  },
-  {
-    id: 'room-1',
-    name: 'The Master Suite',
-    type: 'master',
-    base_price_per_night: 15000,
-    currency: 'INR',
-    capacity: 2,
-    is_active: true,
-  },
-  {
-    id: 'room-2',
-    name: 'The Pine Suite',
-    type: 'deluxe',
-    base_price_per_night: 15000,
-    currency: 'INR',
-    capacity: 2,
-    is_active: true,
-  },
-  {
-    id: 'room-3',
-    name: 'The Garden Room',
-    type: 'garden',
-    base_price_per_night: 15000,
-    currency: 'INR',
-    capacity: 2,
-    is_active: true,
-  },
-];
-
 export class AccommodationService {
   /**
-   * Fetches all active accommodations directly from the Supabase public.accommodations table.
-   * Never caches indefinitely so any database update in Supabase (e.g. room-1 = 100) is reflected immediately.
-   * If Supabase credentials are not yet configured in environment variables, seamlessly uses default accommodations.
+   * Fetches all active accommodations directly from Supabase public.accommodations table.
+   * Explicitly selects id, name, type, base_price_per_night, currency, capacity, is_active, updated_at.
    */
   static async getAllAccommodations(): Promise<AccommodationRecord[]> {
     const supabase = getSupabaseServerClient();
     if (!supabase) {
-      return DEFAULT_ACCOMMODATIONS;
+      return [];
     }
 
     try {
       const { data, error } = await supabase
         .from('accommodations')
         .select('id, name, type, base_price_per_night, currency, capacity, is_active, updated_at')
-        .eq('is_active', true)
         .order('id', { ascending: true });
 
       if (error) {
-        console.warn('[AccommodationService] Supabase accommodations query notice:', error.message);
-        return DEFAULT_ACCOMMODATIONS;
+        console.warn('[AccommodationService] Supabase accommodations query error:', error.message);
+        return [];
       }
 
       if (!data || data.length === 0) {
-        return DEFAULT_ACCOMMODATIONS;
+        return [];
       }
 
       const parsedRecords: AccommodationRecord[] = data.map((item: any) => {
         const rawPrice = Number(item.base_price_per_night);
-        const validPrice = !isNaN(rawPrice) && rawPrice >= 0 ? rawPrice : 15000;
+        const validPrice = !isNaN(rawPrice) ? rawPrice : 0;
 
         return {
           id: String(item.id),
@@ -90,7 +49,7 @@ export class AccommodationService {
           base_price_per_night: validPrice,
           currency: String(item.currency || 'INR'),
           capacity: Number(item.capacity) || 2,
-          is_active: Boolean(item.is_active),
+          is_active: item.is_active !== false,
           updated_at: item.updated_at,
         };
       });
@@ -98,20 +57,20 @@ export class AccommodationService {
       return parsedRecords;
     } catch (err: any) {
       console.warn('[AccommodationService] Error loading accommodations from Supabase:', err.message);
-      return DEFAULT_ACCOMMODATIONS;
+      return [];
     }
   }
 
   /**
    * Retrieves a single active accommodation by ID from Supabase with full active status validation.
+   * Maps 'room-1' -> The Master Suite, 'room-2' -> The Pine Suite, 'room-3' -> The Garden Room, 'entire-villa' -> Entire Villa.
    */
   static async getAccommodationById(id: string): Promise<AccommodationRecord | null> {
     const normalizedId = id === 'entire-villa' || id === 'villa-suroor-main' ? 'entire-villa' : id;
     const supabase = getSupabaseServerClient();
 
     if (!supabase) {
-      const all = await this.getAllAccommodations();
-      return all.find((a) => a.id === normalizedId && a.is_active) || null;
+      return null;
     }
 
     try {
@@ -119,16 +78,14 @@ export class AccommodationService {
         .from('accommodations')
         .select('id, name, type, base_price_per_night, currency, capacity, is_active, updated_at')
         .eq('id', normalizedId)
-        .eq('is_active', true)
         .maybeSingle();
 
       if (error || !data) {
-        const all = await this.getAllAccommodations();
-        return all.find((a) => a.id === normalizedId && a.is_active) || null;
+        return null;
       }
 
       const rawPrice = Number(data.base_price_per_night);
-      const validPrice = !isNaN(rawPrice) && rawPrice >= 0 ? rawPrice : 15000;
+      const validPrice = !isNaN(rawPrice) ? rawPrice : 0;
 
       return {
         id: String(data.id),
@@ -137,12 +94,12 @@ export class AccommodationService {
         base_price_per_night: validPrice,
         currency: String(data.currency || 'INR'),
         capacity: Number(data.capacity) || 2,
-        is_active: Boolean(data.is_active),
+        is_active: data.is_active !== false,
         updated_at: data.updated_at,
       };
     } catch (err: any) {
-      const all = await this.getAllAccommodations();
-      return all.find((a) => a.id === normalizedId && a.is_active) || null;
+      console.warn('[AccommodationService] Error loading accommodation by id:', err.message);
+      return null;
     }
   }
 
@@ -157,15 +114,18 @@ export class AccommodationService {
     const room2 = accommodations.find((a) => a.id === 'room-2');
     const room3 = accommodations.find((a) => a.id === 'room-3');
 
-    const entireVillaPrice = entireVilla ? Number(entireVilla.base_price_per_night) : 30000;
-    const roomPriceDefault = room1 ? Number(room1.base_price_per_night) : (room2 ? Number(room2.base_price_per_night) : 15000);
-
     const roomPrices: Record<string, number> = {};
     accommodations.forEach((acc) => {
-      if (acc.id !== 'entire-villa') {
-        roomPrices[acc.id] = Number(acc.base_price_per_night);
-      }
+      roomPrices[acc.id] = Number(acc.base_price_per_night);
     });
+
+    const entireVillaPrice = entireVilla
+      ? Number(entireVilla.base_price_per_night)
+      : (roomPrices['entire-villa'] ?? 0);
+
+    const roomPriceDefault = room1
+      ? Number(room1.base_price_per_night)
+      : (room2 ? Number(room2.base_price_per_night) : (room3 ? Number(room3.base_price_per_night) : 0));
 
     return {
       entireVillaPricePerNight: entireVillaPrice,
@@ -173,9 +133,10 @@ export class AccommodationService {
       currency: entireVilla?.currency || 'INR',
       currencySymbol: '₹',
       roomPrices: {
-        'room-1': room1 ? Number(room1.base_price_per_night) : roomPriceDefault,
-        'room-2': room2 ? Number(room2.base_price_per_night) : roomPriceDefault,
-        'room-3': room3 ? Number(room3.base_price_per_night) : roomPriceDefault,
+        'room-1': room1 ? Number(room1.base_price_per_night) : (roomPrices['room-1'] ?? 0),
+        'room-2': room2 ? Number(room2.base_price_per_night) : (roomPrices['room-2'] ?? 0),
+        'room-3': room3 ? Number(room3.base_price_per_night) : (roomPrices['room-3'] ?? 0),
+        'entire-villa': entireVillaPrice,
         ...roomPrices,
       },
     };

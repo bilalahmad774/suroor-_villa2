@@ -57,13 +57,19 @@ export function BookingSection() {
 
   // Fetch real-time price quote from backend
   const fetchPriceQuote = useCallback(
-    async (couponToUse = appliedCoupon) => {
+    async (couponToUse = appliedCoupon, signal?: AbortSignal) => {
+      if (!checkIn || !checkOut || checkIn >= checkOut) {
+        setQuote(null);
+        return;
+      }
+
       setLoadingQuote(true);
       try {
         const roomId = selectedSuiteId === 'entire-villa' ? undefined : selectedSuiteId;
         const res = await fetch('/api/booking/quote', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal,
           body: JSON.stringify({
             villaId: 'villa-suroor-main',
             roomId,
@@ -74,24 +80,38 @@ export function BookingSection() {
           }),
         });
 
-        const data = await res.json();
-        if (res.ok) {
+        if (!res.ok) {
+          setQuote(null);
+          return;
+        }
+
+        const data = await res.json().catch(() => null);
+        if (data && !signal?.aborted) {
           setQuote(data);
-        } else {
+        } else if (!signal?.aborted) {
           setQuote(null);
         }
-      } catch (err) {
-        console.error('Failed to calculate quote', err);
+      } catch (err: any) {
+        if (err?.name !== 'AbortError') {
+          // Gracefully clear quote on network glitch without noisy console errors
+          setQuote(null);
+        }
       } finally {
-        setLoadingQuote(false);
+        if (!signal?.aborted) {
+          setLoadingQuote(false);
+        }
       }
     },
     [appliedCoupon, checkIn, checkOut, guestCount, selectedSuiteId]
   );
 
   useEffect(() => {
-    fetchPriceQuote();
-  }, [fetchPriceQuote]);
+    const controller = new AbortController();
+    fetchPriceQuote(appliedCoupon, controller.signal);
+    return () => {
+      controller.abort();
+    };
+  }, [fetchPriceQuote, appliedCoupon]);
 
   const handleApplyCoupon = (e: React.FormEvent) => {
     e.preventDefault();

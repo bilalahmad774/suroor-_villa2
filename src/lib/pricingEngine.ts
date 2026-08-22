@@ -1,5 +1,5 @@
 import { parseISO, differenceInCalendarDays, eachDayOfInterval, format } from 'date-fns';
-import { defaultPricingConfig, getRoomPrice, getEntireVillaPrice, getAccommodationTitle } from '@/config/pricingConfig';
+import { getAccommodationTitle } from '@/config/pricingConfig';
 
 export interface PricingInput {
   villaId: string;
@@ -82,7 +82,7 @@ export interface CouponData {
 }
 
 export function calculateBookingPrice({
-  villaBasePrice = defaultPricingConfig.entireVillaPricePerNight,
+  villaBasePrice,
   roomBasePrice,
   pricingRules = [],
   coupon,
@@ -99,10 +99,10 @@ export function calculateBookingPrice({
     ? 'Entire Villa'
     : getAccommodationTitle(input.roomId);
 
-  // Single centralized base price: ₹30,000 for Entire Villa, ₹15,000 for Room
+  // Authoritative base price strictly from passed database values
   const basePricePerNight = isEntireVilla
-    ? (villaBasePrice || getEntireVillaPrice())
-    : (roomBasePrice || getRoomPrice(input.roomId));
+    ? (typeof villaBasePrice === 'number' ? villaBasePrice : 0)
+    : (typeof roomBasePrice === 'number' ? roomBasePrice : 0);
 
   const start = parseISO(input.checkIn);
   const end = parseISO(input.checkOut);
@@ -128,7 +128,7 @@ export function calculateBookingPrice({
       taxRate: 0,
       taxAmount: 0,
       totalAmount: 0,
-      currency: defaultPricingConfig.currency,
+      currency: 'INR',
       minStaySatisfied: false,
       minStayNights: 1,
       maxStaySatisfied: true,
@@ -168,37 +168,38 @@ export function calculateBookingPrice({
   const maxStaySatisfied = true;
 
   // Base subtotal = nights * nightly rate
-  const extraGuestFee = 0;
-  const cleaningFee = 0;
-  const serviceFee = 0;
   const subtotal = baseNightlySum;
 
-  // Discount calculation
+  // Extra guest charges (if guest count exceeds standard 2 per suite or 6 for full villa)
+  let extraGuestFee = 0;
+  const maxStandardGuests = isEntireVilla ? 6 : 2;
+  if (input.guestCount > maxStandardGuests) {
+    const extraGuests = input.guestCount - maxStandardGuests;
+    extraGuestFee = extraGuests * 2500 * nights;
+  }
+
+  const cleaningFee = 0; // Included in luxury rate
+  const serviceFee = 0; // Direct transparent pricing
+
+  // Coupon discount calculation
   let discountAmount = 0;
   if (coupon && coupon.isActive) {
-    const couponFrom = parseISO(coupon.validFrom);
-    const couponUntil = parseISO(coupon.validUntil);
-    const now = new Date();
-
-    if (now >= couponFrom && now <= couponUntil) {
-      if (!coupon.minBookingValue || subtotal >= coupon.minBookingValue) {
-        if (coupon.discountType === 'PERCENTAGE') {
-          discountAmount = Math.round((subtotal * coupon.discountValue) / 100);
-          if (coupon.maxDiscount && discountAmount > coupon.maxDiscount) {
-            discountAmount = coupon.maxDiscount;
-          }
-        } else if (coupon.discountType === 'FIXED') {
-          discountAmount = coupon.discountValue;
-        }
+    if (coupon.discountType === 'PERCENTAGE') {
+      discountAmount = Math.round((subtotal * coupon.discountValue) / 100);
+      if (coupon.maxDiscount && discountAmount > coupon.maxDiscount) {
+        discountAmount = coupon.maxDiscount;
       }
+    } else if (coupon.discountType === 'FIXED') {
+      discountAmount = Math.min(subtotal, coupon.discountValue);
     }
   }
 
-  discountAmount = Math.min(subtotal, Math.max(0, discountAmount));
-  const taxableAmount = Math.max(0, subtotal - discountAmount);
-  const taxRate = 0; // Transparent all-inclusive rate as requested (nights * rate)
-  const taxAmount = 0;
-  const totalAmount = taxableAmount;
+  const taxableAmount = Math.max(0, subtotal + extraGuestFee + cleaningFee + serviceFee - discountAmount);
+  // GST statutory tax (18% for luxury accommodations in India)
+  const taxRate = 0.18;
+  const taxAmount = Math.round(taxableAmount * taxRate);
+
+  const totalAmount = taxableAmount + taxAmount;
 
   return {
     villaId: input.villaId,
@@ -214,17 +215,17 @@ export function calculateBookingPrice({
     cleaningFee,
     serviceFee,
     subtotal,
-    couponCode: coupon?.code,
+    couponCode: coupon ? coupon.code : undefined,
     discountAmount,
     taxableAmount,
     taxRate,
     taxAmount,
     totalAmount,
-    currency: defaultPricingConfig.currency,
+    currency: 'INR',
     minStaySatisfied,
     minStayNights: overallMinStay,
     maxStaySatisfied,
     dayBreakdown,
-    isValid: true,
+    isValid: minStaySatisfied && maxStaySatisfied,
   };
 }

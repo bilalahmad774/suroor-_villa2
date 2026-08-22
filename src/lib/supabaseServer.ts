@@ -1,5 +1,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
+let cachedUrl = '';
+let cachedKey = '';
 let serverClient: SupabaseClient | null = null;
 
 export function getSupabaseServerClient(): SupabaseClient | null {
@@ -18,16 +20,11 @@ export function getSupabaseServerClient(): SupabaseClient | null {
   ).trim();
 
   // Validate URL and Key
-  if (
-    !supabaseUrl ||
-    !supabaseKey ||
-    supabaseUrl.includes('placeholder') ||
-    supabaseKey.includes('placeholder')
-  ) {
+  if (!supabaseUrl || !supabaseKey || supabaseUrl.includes('placeholder')) {
     return null;
   }
 
-  if (!serverClient) {
+  if (!serverClient || cachedUrl !== supabaseUrl || cachedKey !== supabaseKey) {
     try {
       serverClient = createClient(supabaseUrl, supabaseKey, {
         auth: {
@@ -35,6 +32,8 @@ export function getSupabaseServerClient(): SupabaseClient | null {
           autoRefreshToken: false,
         },
       });
+      cachedUrl = supabaseUrl;
+      cachedKey = supabaseKey;
     } catch (err) {
       console.warn('[SupabaseServer] Failed to initialize Supabase server client:', err);
       return null;

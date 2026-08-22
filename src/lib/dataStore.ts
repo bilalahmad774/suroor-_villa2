@@ -878,18 +878,20 @@ export const dataStore = {
     const villa = memStore.villas[0];
     const roomPrices: Record<string, number> = {};
     memStore.rooms.forEach((r) => {
-      roomPrices[r.id] = r.pricePerNight || defaultPricingConfig.roomPricePerNight;
+      roomPrices[r.id] = r.pricePerNight || 0;
     });
 
     return {
-      roomPricePerNight: memStore.rooms[0]?.pricePerNight || defaultPricingConfig.roomPricePerNight,
-      entireVillaPricePerNight: villa?.basePrice || defaultPricingConfig.entireVillaPricePerNight,
-      currency: defaultPricingConfig.currency,
-      currencySymbol: defaultPricingConfig.currencySymbol,
+      roomPricePerNight: memStore.rooms[0]?.pricePerNight || 0,
+      entireVillaPricePerNight: villa?.basePrice || 0,
+      currency: 'INR',
+      currencySymbol: '₹',
       roomPrices: {
-        'room-1': roomPrices['room-1'] || defaultPricingConfig.roomPricePerNight,
-        'room-2': roomPrices['room-2'] || defaultPricingConfig.roomPricePerNight,
-        'room-3': roomPrices['room-3'] || defaultPricingConfig.roomPricePerNight,
+        'room-1': roomPrices['room-1'] || 0,
+        'room-2': roomPrices['room-2'] || 0,
+        'room-3': roomPrices['room-3'] || 0,
+        'entire-villa': villa?.basePrice || 0,
+        ...roomPrices,
       },
     };
   },

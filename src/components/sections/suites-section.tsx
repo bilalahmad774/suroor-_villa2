@@ -5,10 +5,9 @@ import Image from 'next/image';
 import { Reveal } from '@/components/ui/reveal';
 import { SectionHeading } from '@/components/ui/section-heading';
 import { ArrowRight, X, BedDouble, Bath, Users, Eye, Mountain, Sparkles, Home } from 'lucide-react';
-import { rooms, entireVillaInfo } from '@/config/content';
+import { rooms } from '@/config/content';
 import { getCategoryGallery, getHeroImage, type ImageCategoryKey } from '@/config/imageConfig';
 import type { Room } from '@/types/domain';
-import { cn } from '@/lib/utils';
 import { useBooking } from '@/context/BookingContext';
 import { usePricing } from '@/hooks/usePricing';
 
@@ -21,7 +20,7 @@ const roomImageMap: Record<string, ImageCategoryKey> = {
 export function SuitesSection() {
   const [selected, setSelected] = useState<Room | null>(null);
   const { openBooking } = useBooking();
-  const { entireVillaPrice, roomPrice, getRoomPrice } = usePricing();
+  const { entireVillaPrice, roomPrice, getRoomPrice, isLoading } = usePricing();
   const heroExterior = getHeroImage('exterior');
 
   return (
@@ -66,9 +65,17 @@ export function SuitesSection() {
                     <div className="mt-2 text-left sm:mt-0 sm:text-right">
                       <div className="flex items-baseline gap-1">
                         <span className="font-serif text-3xl font-bold text-primary">
-                          ₹{entireVillaPrice.toLocaleString('en-IN')}
+                          {entireVillaPrice !== null ? (
+                            `₹${entireVillaPrice.toLocaleString('en-IN')}`
+                          ) : isLoading ? (
+                            <span className="text-lg animate-pulse text-muted-foreground">Loading...</span>
+                          ) : (
+                            'Rate on request'
+                          )}
                         </span>
-                        <span className="text-xs text-muted-foreground">/ night</span>
+                        {entireVillaPrice !== null && (
+                          <span className="text-xs text-muted-foreground">/ night</span>
+                        )}
                       </div>
                       <span className="text-[11px] text-muted-foreground block">
                         (Flat rate for all 3 suites • Entire estate yours alone)
@@ -114,7 +121,13 @@ export function SuitesSection() {
 
                 <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <span className="text-xs text-muted-foreground">
-                    Special flat buyout price: <strong className="text-foreground">₹{entireVillaPrice.toLocaleString('en-IN')} / night</strong> (not charged per room).
+                    {entireVillaPrice !== null ? (
+                      <>
+                        Special flat buyout price: <strong className="text-foreground">₹{entireVillaPrice.toLocaleString('en-IN')} / night</strong> (not charged per room).
+                      </>
+                    ) : (
+                      'Flat estate buyout rate'
+                    )}
                   </span>
                   <button
                     onClick={() => openBooking({ roomId: 'entire-villa' })}
@@ -136,7 +149,15 @@ export function SuitesSection() {
               Or Choose an Individual Suite
             </h3>
             <p className="text-xs text-muted-foreground">
-              Standard rate: <strong className="text-foreground">₹{roomPrice.toLocaleString('en-IN')} / night</strong> per individual suite.
+              {roomPrice !== null ? (
+                <>
+                  Standard rate: <strong className="text-foreground">₹{roomPrice.toLocaleString('en-IN')} / night</strong> per individual suite.
+                </>
+              ) : isLoading ? (
+                <span className="animate-pulse">Loading rates from database...</span>
+              ) : (
+                'Select a suite below to check rates.'
+              )}
             </p>
           </div>
 
@@ -171,9 +192,17 @@ export function SuitesSection() {
                         </h4>
                         <p className="shrink-0 text-right">
                           <span className="font-serif text-lg font-bold text-primary">
-                            ₹{price.toLocaleString('en-IN')}
+                            {price !== null ? (
+                              `₹${price.toLocaleString('en-IN')}`
+                            ) : isLoading ? (
+                              <span className="text-xs text-muted-foreground animate-pulse">Loading...</span>
+                            ) : (
+                              'Contact for rate'
+                            )}
                           </span>
-                          <span className="block text-[11px] text-muted-foreground">/ night</span>
+                          {price !== null && (
+                            <span className="block text-[11px] text-muted-foreground">/ night</span>
+                          )}
                         </p>
                       </div>
 
@@ -218,6 +247,7 @@ export function SuitesSection() {
         <RoomDetailModal
           room={selected}
           price={getRoomPrice(selected.id)}
+          isLoading={isLoading}
           images={getCategoryGallery(roomImageMap[selected.id])}
           onClose={() => setSelected(null)}
           onReserve={() => {
@@ -246,17 +276,18 @@ function Spec({ icon, label, value }: { icon: React.ReactNode; label: string; va
 function RoomDetailModal({
   room,
   price,
+  isLoading,
   images,
   onClose,
   onReserve,
 }: {
   room: Room;
-  price: number;
+  price: number | null;
+  isLoading?: boolean;
   images: { src: string; alt: string; caption?: string }[];
   onClose: () => void;
   onReserve?: () => void;
 }) {
-
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
@@ -298,9 +329,17 @@ function RoomDetailModal({
             <h3 className="font-serif text-3xl font-medium text-foreground">{room.name}</h3>
             <p className="shrink-0 text-right">
               <span className="font-serif text-2xl font-bold text-primary">
-                ₹{price.toLocaleString('en-IN')}
+                {price !== null ? (
+                  `₹${price.toLocaleString('en-IN')}`
+                ) : isLoading ? (
+                  <span className="text-sm text-muted-foreground animate-pulse">Loading...</span>
+                ) : (
+                  'Contact for rate'
+                )}
               </span>
-              <span className="block text-xs text-muted-foreground">/ night</span>
+              {price !== null && (
+                <span className="block text-xs text-muted-foreground">/ night</span>
+              )}
             </p>
           </div>
 
@@ -334,7 +373,7 @@ function RoomDetailModal({
               onClick={onReserve}
               className="inline-flex flex-1 items-center justify-center gap-2 rounded-md bg-primary px-6 py-3.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-accent hover:text-primary-foreground cursor-pointer"
             >
-              Reserve this suite (₹{price.toLocaleString('en-IN')}/night)
+              Reserve this suite {price !== null ? `(₹${price.toLocaleString('en-IN')}/night)` : ''}
               <ArrowRight className="h-4 w-4" />
             </button>
             <button

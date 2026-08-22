@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { defaultPricingConfig, type PricingConfig } from '@/config/pricingConfig';
+import { supabase } from '@/src/lib/supabaseClient';
+import type { PricingConfig } from '@/config/pricingConfig';
 
 export interface AccommodationItem {
   id: string;
@@ -15,7 +16,7 @@ export interface AccommodationItem {
 }
 
 export function usePricing() {
-  const [pricing, setPricing] = useState<PricingConfig>(defaultPricingConfig);
+  const [pricing, setPricing] = useState<PricingConfig | null>(null);
   const [accommodations, setAccommodations] = useState<AccommodationItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -24,6 +25,8 @@ export function usePricing() {
     try {
       setIsLoading(true);
       setError(null);
+
+      // 1. Fetch live from the server endpoint
       const res = await fetch(`/api/pricing?_t=${Date.now()}`, {
         cache: 'no-store',
         headers: {
@@ -32,21 +35,64 @@ export function usePricing() {
         },
       });
 
-      const data = await res.json();
-
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || `Failed to fetch pricing (HTTP ${res.status})`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.accommodations && data.accommodations.length > 0) {
+          setPricing(data.pricing);
+          setAccommodations(data.accommodations);
+          setIsLoading(false);
+          return;
+        }
       }
 
-      if (data.pricing) {
-        setPricing(data.pricing);
+      // 2. Direct browser-side fallback query to Supabase public.accommodations
+      const { data: sbData, error: sbError } = await supabase
+        .from('accommodations')
+        .select('id, name, type, base_price_per_night, currency, capacity, is_active, updated_at')
+        .order('id', { ascending: true });
+
+      if (sbError) {
+        throw new Error(sbError.message);
       }
-      if (data.accommodations) {
-        setAccommodations(data.accommodations);
+
+      if (sbData && sbData.length > 0) {
+        const parsed: AccommodationItem[] = sbData.map((item: any) => ({
+          id: String(item.id),
+          name: String(item.name || item.id),
+          type: String(item.type || 'standard'),
+          base_price_per_night: Number(item.base_price_per_night) || 0,
+          currency: String(item.currency || 'INR'),
+          capacity: Number(item.capacity) || 2,
+          is_active: item.is_active !== false,
+          updated_at: item.updated_at,
+        }));
+
+        const entireVilla = parsed.find((a) => a.id === 'entire-villa');
+        const room1 = parsed.find((a) => a.id === 'room-1');
+        const roomPrices: Record<string, number> = {};
+        parsed.forEach((a) => {
+          roomPrices[a.id] = a.base_price_per_night;
+        });
+
+        const clientConfig: PricingConfig = {
+          entireVillaPricePerNight: entireVilla?.base_price_per_night ?? (roomPrices['entire-villa'] || 0),
+          roomPricePerNight: room1?.base_price_per_night ?? 0,
+          currency: entireVilla?.currency || 'INR',
+          currencySymbol: '₹',
+          roomPrices: {
+            'room-1': room1?.base_price_per_night ?? 0,
+            ...roomPrices,
+          },
+        };
+
+        setAccommodations(parsed);
+        setPricing(clientConfig);
+      } else {
+        setError('No accommodation records found in public.accommodations table.');
       }
     } catch (err: any) {
-      console.warn('[usePricing] Notice on live pricing fetch:', err.message);
-      setError(err.message || 'Unable to load real-time accommodation prices.');
+      console.warn('[usePricing] Notice loading accommodation prices:', err.message);
+      setError(err.message || 'Unable to load real-time prices from database.');
     } finally {
       setIsLoading(false);
     }
@@ -56,17 +102,28 @@ export function usePricing() {
     fetchPricing();
   }, [fetchPricing]);
 
-  const entireVillaPrice = pricing.entireVillaPricePerNight;
-  const roomPrice = pricing.roomPricePerNight;
+  const entireVillaPrice =
+    accommodations.find((a) => a.id === 'entire-villa')?.base_price_per_night ??
+    pricing?.entireVillaPricePerNight ??
+    null;
+
+  const roomPrice =
+    accommodations.find((a) => a.id === 'room-1')?.base_price_per_night ??
+    pricing?.roomPricePerNight ??
+    null;
 
   const getRoomPrice = useCallback(
-    (roomId?: string): number => {
+    (roomId?: string): number | null => {
       if (!roomId || roomId === 'entire-villa' || roomId === 'villa-suroor-main') {
-        return pricing.entireVillaPricePerNight;
+        const v = accommodations.find((a) => a.id === 'entire-villa');
+        if (v) return v.base_price_per_night;
+        return pricing?.entireVillaPricePerNight ?? null;
       }
-      return pricing.roomPrices?.[roomId] ?? pricing.roomPricePerNight;
+      const r = accommodations.find((a) => a.id === roomId);
+      if (r) return r.base_price_per_night;
+      return pricing?.roomPrices?.[roomId] ?? pricing?.roomPricePerNight ?? null;
     },
-    [pricing]
+    [accommodations, pricing]
   );
 
   const getAccommodation = useCallback(

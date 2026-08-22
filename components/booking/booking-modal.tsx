@@ -108,7 +108,7 @@ export function BookingModal({
 
   // Fetch Live Server Quote
   const fetchQuote = useCallback(
-    async (couponToApply = appliedCoupon) => {
+    async (couponToApply = appliedCoupon, signal?: AbortSignal) => {
       if (!checkIn || !checkOut || checkIn >= checkOut) {
         setQuote(null);
         return;
@@ -119,6 +119,7 @@ export function BookingModal({
         const res = await fetch('/api/booking/quote', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal,
           body: JSON.stringify({
             villaId: 'villa-suroor-main',
             checkIn,
@@ -129,26 +130,34 @@ export function BookingModal({
           }),
         });
 
-        const data = await res.json();
-        if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data) {
+          if (!signal?.aborted) {
+            setQuote({
+              isValid: false,
+              isAvailable: false,
+              validationError: data?.error || 'Failed to calculate pricing quote.',
+              message: data?.error || 'Failed to calculate pricing quote.',
+            });
+          }
+          return;
+        }
+        if (!signal?.aborted) {
+          setQuote(data);
+        }
+      } catch (err: any) {
+        if (err?.name !== 'AbortError') {
           setQuote({
             isValid: false,
             isAvailable: false,
-            validationError: data.error || 'Failed to calculate pricing quote.',
-            message: data.error || 'Failed to calculate pricing quote.',
+            validationError: err?.message || 'Error updating price.',
+            message: err?.message || 'Error updating price.',
           });
-          return;
         }
-        setQuote(data);
-      } catch (err: any) {
-        setQuote({
-          isValid: false,
-          isAvailable: false,
-          validationError: err.message || 'Error updating price.',
-          message: err.message || 'Error updating price.',
-        });
       } finally {
-        setLoadingQuote(false);
+        if (!signal?.aborted) {
+          setLoadingQuote(false);
+        }
       }
     },
     [appliedCoupon, checkIn, checkOut, guestCount, selectedRoomId]
@@ -169,9 +178,13 @@ export function BookingModal({
 
   useEffect(() => {
     if (isOpen) {
-      fetchQuote();
+      const controller = new AbortController();
+      fetchQuote(appliedCoupon, controller.signal);
+      return () => {
+        controller.abort();
+      };
     }
-  }, [isOpen, fetchQuote]);
+  }, [isOpen, fetchQuote, appliedCoupon]);
 
   const handleApplyCoupon = () => {
     if (!couponCode.trim()) return;
@@ -470,7 +483,7 @@ export function BookingModal({
                       <Home className="w-3.5 h-3.5 text-accent" /> Reserve Entire Villa
                     </span>
                     <Badge variant="outline" className="text-[10px] font-bold border-accent text-accent">
-                      ₹{entireVillaPrice.toLocaleString('en-IN')}/night
+                      {entireVillaPrice !== null ? `₹${entireVillaPrice.toLocaleString('en-IN')}/night` : 'Loading...'}
                     </Badge>
                   </div>
                   <p className="text-[11px] text-muted-foreground mt-1.5">
@@ -497,7 +510,7 @@ export function BookingModal({
                           <BedDouble className="w-3.5 h-3.5 text-accent" /> {r.name}
                         </span>
                         <Badge variant="outline" className="text-[10px] font-bold border-border text-foreground">
-                          ₹{roomPrice.toLocaleString('en-IN')}/night
+                          {roomPrice !== null ? `₹${roomPrice.toLocaleString('en-IN')}/night` : 'Loading...'}
                         </Badge>
                       </div>
                       <p className="text-[11px] text-muted-foreground mt-1.5">
@@ -585,7 +598,7 @@ export function BookingModal({
                     <Receipt className="w-4 h-4 text-accent" /> Booking Summary
                   </h4>
                   <p className="text-[11px] text-muted-foreground">
-                    {accommodationName} — <strong className="text-foreground">₹{currentNightlyRate.toLocaleString('en-IN')} / night</strong>
+                    {accommodationName} — <strong className="text-foreground">{currentNightlyRate !== null ? `₹${currentNightlyRate.toLocaleString('en-IN')} / night` : (loadingQuote ? 'Calculating rate...' : 'Rate pending')}</strong>
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -615,7 +628,7 @@ export function BookingModal({
                 <div className="space-y-2 text-xs divide-y divide-border/60">
                   <div className="flex justify-between pt-1">
                     <span className="text-muted-foreground">
-                      {accommodationName} (₹{(quote.nightlyRate || currentNightlyRate).toLocaleString('en-IN')} × {quote.nights} night{quote.nights > 1 ? 's' : ''})
+                      {accommodationName} (₹{(quote.nightlyRate ?? currentNightlyRate ?? 0).toLocaleString('en-IN')} × {quote.nights} night{quote.nights > 1 ? 's' : ''})
                     </span>
                     <span className="font-semibold text-foreground">
                       ₹{(quote.roomCharges || quote.baseNightlySum)?.toLocaleString('en-IN')}
@@ -702,7 +715,7 @@ export function BookingModal({
               <div>
                 <div className="font-semibold text-foreground">{accommodationName}</div>
                 <div className="text-muted-foreground mt-0.5">
-                  {checkIn} to {checkOut} ({quote?.nights || 1} nights) • ₹{(quote?.nightlyRate || currentNightlyRate).toLocaleString('en-IN')}/night
+                  {checkIn} to {checkOut} ({quote?.nights || 1} nights){(quote?.nightlyRate || currentNightlyRate) ? ` • ₹${(quote?.nightlyRate || currentNightlyRate).toLocaleString('en-IN')}/night` : ''}
                 </div>
               </div>
               <div className="text-right">
