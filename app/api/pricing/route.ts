@@ -3,34 +3,45 @@ import { AccommodationService } from '@/src/lib/accommodationService';
 import { dataStore } from '@/src/lib/dataStore';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export async function GET() {
   try {
     const accommodations = await AccommodationService.getAllAccommodations();
     const dynamicPricing = await AccommodationService.getPricingConfigFromDatabase();
 
-    // Keep dataStore in sync
+    // Keep dataStore in sync with fresh database prices
     dataStore.syncAccommodations(accommodations);
 
-    return NextResponse.json({
-      success: true,
-      pricing: dynamicPricing,
-      accommodations,
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        pricing: dynamicPricing,
+        accommodations,
+      },
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+          Pragma: 'no-cache',
+          Expires: '0',
+        },
+      }
+    );
   } catch (error: any) {
-    console.error('[API /api/pricing] Error loading prices:', error);
-    // Graceful fallback to in-memory store
-    const fallbackConfig = dataStore.getPricingConfig();
-    return NextResponse.json({
-      success: true,
-      pricing: fallbackConfig,
-      accommodations: [
-        { id: 'entire-villa', name: 'Entire Villa (All 3 Suites)', type: 'buyout', base_price_per_night: fallbackConfig.entireVillaPricePerNight, currency: 'INR', capacity: 6, is_active: true },
-        { id: 'room-1', name: 'The Master Suite', type: 'master', base_price_per_night: fallbackConfig.roomPrices['room-1'], currency: 'INR', capacity: 2, is_active: true },
-        { id: 'room-2', name: 'The Pine Suite', type: 'deluxe', base_price_per_night: fallbackConfig.roomPrices['room-2'], currency: 'INR', capacity: 2, is_active: true },
-        { id: 'room-3', name: 'The Garden Room', type: 'garden', base_price_per_night: fallbackConfig.roomPrices['room-3'], currency: 'INR', capacity: 2, is_active: true },
-      ],
-    });
+    console.error('[API /api/pricing] Error loading database prices:', error.message);
+    return NextResponse.json(
+      {
+        success: false,
+        error: error.message || 'Failed to fetch accommodation pricing from Supabase.',
+      },
+      {
+        status: 500,
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        },
+      }
+    );
   }
 }
+
 

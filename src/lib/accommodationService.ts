@@ -51,36 +51,15 @@ export const DEFAULT_ACCOMMODATIONS: AccommodationRecord[] = [
   },
 ];
 
-// In-memory cache for fast sub-millisecond response times
-interface CacheEntry {
-  data: AccommodationRecord[];
-  timestamp: number;
-}
-
-let cachedAccommodations: CacheEntry | null = null;
-const CACHE_TTL_MS = 15000; // 15 seconds TTL
-
 export class AccommodationService {
   /**
-   * Clears the in-memory cache so subsequent reads query fresh Supabase records
+   * Fetches all active accommodations directly from the Supabase public.accommodations table.
+   * Never caches indefinitely so any database update in Supabase (e.g. room-1 = 100) is reflected immediately.
+   * If Supabase credentials are not yet configured in environment variables, seamlessly uses default accommodations.
    */
-  static invalidateCache() {
-    cachedAccommodations = null;
-  }
-
-  /**
-   * Fetches all active accommodations from the Supabase public.accommodations table.
-   * Falls back gracefully to default seed configuration if Supabase is offline or unconfigured.
-   */
-  static async getAllAccommodations(forceFresh = false): Promise<AccommodationRecord[]> {
-    const now = Date.now();
-    if (!forceFresh && cachedAccommodations && now - cachedAccommodations.timestamp < CACHE_TTL_MS) {
-      return cachedAccommodations.data;
-    }
-
+  static async getAllAccommodations(): Promise<AccommodationRecord[]> {
     const supabase = getSupabaseServerClient();
     if (!supabase) {
-      // Supabase is not configured yet - return reliable default seeds
       return DEFAULT_ACCOMMODATIONS;
     }
 
@@ -92,53 +71,79 @@ export class AccommodationService {
         .order('id', { ascending: true });
 
       if (error) {
-        console.warn('[AccommodationService] Supabase query notice:', error.message);
-        // If table doesn't exist yet, return defaults
+        console.warn('[AccommodationService] Supabase accommodations query notice:', error.message);
         return DEFAULT_ACCOMMODATIONS;
       }
 
       if (!data || data.length === 0) {
-        // Table exists but is empty; attempt to seed if possible
-        await this.seedAccommodationsIfEmpty();
         return DEFAULT_ACCOMMODATIONS;
       }
 
-      const parsedRecords: AccommodationRecord[] = data.map((item: any) => ({
-        id: String(item.id),
-        name: String(item.name || item.id),
-        type: String(item.type || 'standard'),
-        base_price_per_night: Number(item.base_price_per_night) || 15000,
-        currency: String(item.currency || 'INR'),
-        capacity: Number(item.capacity) || 2,
-        is_active: Boolean(item.is_active),
-        updated_at: item.updated_at,
-      }));
+      const parsedRecords: AccommodationRecord[] = data.map((item: any) => {
+        const rawPrice = Number(item.base_price_per_night);
+        const validPrice = !isNaN(rawPrice) && rawPrice >= 0 ? rawPrice : 15000;
 
-      cachedAccommodations = {
-        data: parsedRecords,
-        timestamp: now,
-      };
+        return {
+          id: String(item.id),
+          name: String(item.name || item.id),
+          type: String(item.type || 'standard'),
+          base_price_per_night: validPrice,
+          currency: String(item.currency || 'INR'),
+          capacity: Number(item.capacity) || 2,
+          is_active: Boolean(item.is_active),
+          updated_at: item.updated_at,
+        };
+      });
 
       return parsedRecords;
     } catch (err: any) {
-      console.error('[AccommodationService] Error querying Supabase accommodations:', err.message);
+      console.warn('[AccommodationService] Error loading accommodations from Supabase:', err.message);
       return DEFAULT_ACCOMMODATIONS;
     }
   }
 
   /**
-   * Retrieves a single accommodation by ID from Supabase with full type and active status validation.
+   * Retrieves a single active accommodation by ID from Supabase with full active status validation.
    */
   static async getAccommodationById(id: string): Promise<AccommodationRecord | null> {
     const normalizedId = id === 'entire-villa' || id === 'villa-suroor-main' ? 'entire-villa' : id;
-    const all = await this.getAllAccommodations();
-    const found = all.find((a) => a.id === normalizedId && a.is_active);
+    const supabase = getSupabaseServerClient();
 
-    if (found) return found;
+    if (!supabase) {
+      const all = await this.getAllAccommodations();
+      return all.find((a) => a.id === normalizedId && a.is_active) || null;
+    }
 
-    // Fallback search in DEFAULT_ACCOMMODATIONS
-    const fallback = DEFAULT_ACCOMMODATIONS.find((a) => a.id === normalizedId && a.is_active);
-    return fallback || null;
+    try {
+      const { data, error } = await supabase
+        .from('accommodations')
+        .select('id, name, type, base_price_per_night, currency, capacity, is_active, updated_at')
+        .eq('id', normalizedId)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (error || !data) {
+        const all = await this.getAllAccommodations();
+        return all.find((a) => a.id === normalizedId && a.is_active) || null;
+      }
+
+      const rawPrice = Number(data.base_price_per_night);
+      const validPrice = !isNaN(rawPrice) && rawPrice >= 0 ? rawPrice : 15000;
+
+      return {
+        id: String(data.id),
+        name: String(data.name || data.id),
+        type: String(data.type || 'standard'),
+        base_price_per_night: validPrice,
+        currency: String(data.currency || 'INR'),
+        capacity: Number(data.capacity) || 2,
+        is_active: Boolean(data.is_active),
+        updated_at: data.updated_at,
+      };
+    } catch (err: any) {
+      const all = await this.getAllAccommodations();
+      return all.find((a) => a.id === normalizedId && a.is_active) || null;
+    }
   }
 
   /**
@@ -152,18 +157,26 @@ export class AccommodationService {
     const room2 = accommodations.find((a) => a.id === 'room-2');
     const room3 = accommodations.find((a) => a.id === 'room-3');
 
-    const entireVillaPrice = entireVilla?.base_price_per_night ?? 30000;
-    const roomPriceDefault = room1?.base_price_per_night ?? 15000;
+    const entireVillaPrice = entireVilla ? Number(entireVilla.base_price_per_night) : 30000;
+    const roomPriceDefault = room1 ? Number(room1.base_price_per_night) : (room2 ? Number(room2.base_price_per_night) : 15000);
+
+    const roomPrices: Record<string, number> = {};
+    accommodations.forEach((acc) => {
+      if (acc.id !== 'entire-villa') {
+        roomPrices[acc.id] = Number(acc.base_price_per_night);
+      }
+    });
 
     return {
       entireVillaPricePerNight: entireVillaPrice,
       roomPricePerNight: roomPriceDefault,
-      currency: 'INR',
+      currency: entireVilla?.currency || 'INR',
       currencySymbol: '₹',
       roomPrices: {
-        'room-1': room1?.base_price_per_night ?? 15000,
-        'room-2': room2?.base_price_per_night ?? 15000,
-        'room-3': room3?.base_price_per_night ?? 15000,
+        'room-1': room1 ? Number(room1.base_price_per_night) : roomPriceDefault,
+        'room-2': room2 ? Number(room2.base_price_per_night) : roomPriceDefault,
+        'room-3': room3 ? Number(room3.base_price_per_night) : roomPriceDefault,
+        ...roomPrices,
       },
     };
   }
@@ -174,8 +187,6 @@ export class AccommodationService {
   static async updateAccommodationPrice(id: string, newPrice: number): Promise<boolean> {
     const normalizedId = id === 'entire-villa' || id === 'villa-suroor-main' ? 'entire-villa' : id;
     const supabase = getSupabaseServerClient();
-
-    this.invalidateCache();
 
     if (!supabase) {
       return false;
@@ -199,40 +210,6 @@ export class AccommodationService {
     } catch (err: any) {
       console.error('[AccommodationService] Error during Supabase price update:', err.message);
       return false;
-    }
-  }
-
-  /**
-   * Auto-seeds the accommodations table if connected and empty
-   */
-  static async seedAccommodationsIfEmpty() {
-    const supabase = getSupabaseServerClient();
-    if (!supabase) return;
-
-    try {
-      const { data: existing } = await supabase
-        .from('accommodations')
-        .select('id')
-        .limit(1);
-
-      if (!existing || existing.length === 0) {
-        await supabase.from('accommodations').upsert(
-          DEFAULT_ACCOMMODATIONS.map((item) => ({
-            id: item.id,
-            name: item.name,
-            type: item.type,
-            base_price_per_night: item.base_price_per_night,
-            currency: item.currency,
-            capacity: item.capacity,
-            is_active: item.is_active,
-            updated_at: new Date().toISOString(),
-          })),
-          { onConflict: 'id' }
-        );
-      }
-    } catch (err: any) {
-      // Non-blocking catch
-      console.warn('[AccommodationService] Auto-seed check notice:', err.message);
     }
   }
 }

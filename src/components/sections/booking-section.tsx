@@ -23,6 +23,7 @@ import { toast } from 'sonner';
 import { villaInfo, rooms as suites } from '@/config/content';
 import { siteConfig } from '@/config/siteConfig';
 import { useBooking } from '@/context/BookingContext';
+import { usePricing } from '@/hooks/usePricing';
 
 function getDefaultStayDates() {
   const tomorrow = new Date();
@@ -38,6 +39,7 @@ function getDefaultStayDates() {
 
 export function BookingSection() {
   const { openBooking } = useBooking();
+  const { entireVillaPrice, getRoomPrice } = usePricing();
   const defaultDates = getDefaultStayDates();
 
   // Selected parameters
@@ -339,7 +341,7 @@ export function BookingSection() {
                 <div className="space-y-2.5 text-xs text-muted-foreground pb-4 border-b border-border/60">
                   <div className="flex justify-between">
                     <span>
-                      ₹{(quote.nightlyRate || quote.baseNightlyRate || (quote.nights ? Math.round(quote.baseNightlySum / quote.nights) : 15000))?.toLocaleString('en-IN')} × {quote.nights} night
+                      ₹{(quote.nightlyRate || quote.baseNightlyRate || (quote.nights ? Math.round(quote.baseNightlySum / quote.nights) : (selectedSuiteId === 'entire-villa' ? entireVillaPrice : getRoomPrice(selectedSuiteId))))?.toLocaleString('en-IN')} × {quote.nights} night
                       {quote.nights > 1 ? 's' : ''}
                     </span>
                     <span className="font-semibold text-foreground">

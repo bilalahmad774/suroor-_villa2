@@ -11,6 +11,7 @@ export interface AccommodationItem {
   currency: string;
   capacity: number;
   is_active: boolean;
+  updated_at?: string;
 }
 
 export function usePricing() {
@@ -23,16 +24,20 @@ export function usePricing() {
     try {
       setIsLoading(true);
       setError(null);
-      const res = await fetch('/api/pricing', {
-        headers: { credentials: 'same-origin' },
+      const res = await fetch(`/api/pricing?_t=${Date.now()}`, {
         cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          Pragma: 'no-cache',
+        },
       });
 
-      if (!res.ok) {
-        throw new Error(`Failed to fetch pricing (HTTP ${res.status})`);
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || `Failed to fetch pricing (HTTP ${res.status})`);
       }
 
-      const data = await res.json();
       if (data.pricing) {
         setPricing(data.pricing);
       }
@@ -40,9 +45,8 @@ export function usePricing() {
         setAccommodations(data.accommodations);
       }
     } catch (err: any) {
-      console.warn('[usePricing] Notice: Using fallback baseline pricing:', err.message);
-      setError(err.message || 'Failed to load live pricing.');
-      // Keep defaultPricingConfig as reliable fallback
+      console.warn('[usePricing] Notice on live pricing fetch:', err.message);
+      setError(err.message || 'Unable to load real-time accommodation prices.');
     } finally {
       setIsLoading(false);
     }
@@ -52,12 +56,15 @@ export function usePricing() {
     fetchPricing();
   }, [fetchPricing]);
 
+  const entireVillaPrice = pricing.entireVillaPricePerNight;
+  const roomPrice = pricing.roomPricePerNight;
+
   const getRoomPrice = useCallback(
     (roomId?: string): number => {
       if (!roomId || roomId === 'entire-villa' || roomId === 'villa-suroor-main') {
-        return pricing.entireVillaPricePerNight || 30000;
+        return pricing.entireVillaPricePerNight;
       }
-      return pricing.roomPrices?.[roomId] ?? pricing.roomPricePerNight ?? 15000;
+      return pricing.roomPrices?.[roomId] ?? pricing.roomPricePerNight;
     },
     [pricing]
   );
@@ -72,8 +79,8 @@ export function usePricing() {
   return {
     pricing,
     accommodations,
-    entireVillaPrice: pricing.entireVillaPricePerNight || 30000,
-    roomPrice: pricing.roomPricePerNight || 15000,
+    entireVillaPrice,
+    roomPrice,
     getRoomPrice,
     getAccommodation,
     isLoading,
