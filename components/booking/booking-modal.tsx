@@ -34,7 +34,7 @@ import {
 } from 'lucide-react';
 import { siteConfig } from '@/config/siteConfig';
 import { rooms } from '@/config/content';
-import { defaultPricingConfig, getRoomPrice, getEntireVillaPrice } from '@/config/pricingConfig';
+import { usePricing } from '@/hooks/usePricing';
 
 interface BookingModalProps {
   isOpen: boolean;
@@ -63,6 +63,7 @@ export function BookingModal({
   initialCheckIn,
   initialCheckOut,
 }: BookingModalProps) {
+  const { entireVillaPrice, getRoomPrice } = usePricing();
   const defaultDates = getDefaultModalDates();
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
 
@@ -102,7 +103,7 @@ export function BookingModal({
     ? 'Entire Villa (All 3 Suites)'
     : selectedRoomObj?.name || 'Selected Suite';
   const currentNightlyRate = isEntireVilla
-    ? getEntireVillaPrice()
+    ? entireVillaPrice
     : getRoomPrice(selectedRoomId);
 
   // Fetch Live Server Quote
@@ -469,7 +470,7 @@ export function BookingModal({
                       <Home className="w-3.5 h-3.5 text-accent" /> Reserve Entire Villa
                     </span>
                     <Badge variant="outline" className="text-[10px] font-bold border-accent text-accent">
-                      ₹{getEntireVillaPrice().toLocaleString('en-IN')}/night
+                      ₹{entireVillaPrice.toLocaleString('en-IN')}/night
                     </Badge>
                   </div>
                   <p className="text-[11px] text-muted-foreground mt-1.5">

@@ -5,6 +5,7 @@ import { prisma } from './db';
 import { hashPassword, comparePassword } from './auth';
 import { calculateBookingPrice, Rule, CouponData, PricingQuote } from './pricingEngine';
 import { defaultPricingConfig, getRoomPrice, getEntireVillaPrice, PricingConfig } from '@/config/pricingConfig';
+import { AccommodationService } from './accommodationService';
 import { format, parseISO, addMinutes } from 'date-fns';
 
 export function normalizeDateOnly(dateStrOrObj: string | Date | null | undefined): string {
@@ -860,6 +861,19 @@ export const dataStore = {
   },
 
   // CENTRALIZED PRICING CONFIGURATION HELPERS
+  syncAccommodations(accommodations: { id: string; base_price_per_night: number }[]): void {
+    const entireVilla = accommodations.find((a) => a.id === 'entire-villa');
+    if (entireVilla && memStore.villas[0]) {
+      memStore.villas[0].basePrice = entireVilla.base_price_per_night;
+    }
+    accommodations.forEach((acc) => {
+      const room = memStore.rooms.find((r) => r.id === acc.id);
+      if (room) {
+        room.pricePerNight = acc.base_price_per_night;
+      }
+    });
+  },
+
   getPricingConfig(): PricingConfig {
     const villa = memStore.villas[0];
     const roomPrices: Record<string, number> = {};
@@ -886,10 +900,14 @@ export const dataStore = {
     roomPrices?: Record<string, number>;
   }): Promise<PricingConfig> {
     if (newConfig.entireVillaPricePerNight !== undefined && newConfig.entireVillaPricePerNight > 0) {
+      const vPrice = Number(newConfig.entireVillaPricePerNight);
       if (memStore.villas[0]) {
-        memStore.villas[0].basePrice = Number(newConfig.entireVillaPricePerNight);
+        memStore.villas[0].basePrice = vPrice;
         memStore.villas[0].updatedAt = new Date().toISOString();
       }
+      AccommodationService.updateAccommodationPrice('entire-villa', vPrice).catch((e) =>
+        console.warn('Supabase sync entire-villa price notice:', e.message)
+      );
     }
 
     if (newConfig.roomPricePerNight !== undefined && newConfig.roomPricePerNight > 0) {
@@ -897,6 +915,9 @@ export const dataStore = {
       memStore.rooms.forEach((r) => {
         r.pricePerNight = perRoom;
         r.updatedAt = new Date().toISOString();
+        AccommodationService.updateAccommodationPrice(r.id, perRoom).catch((e) =>
+          console.warn(`Supabase sync ${r.id} price notice:`, e.message)
+        );
       });
     }
 
@@ -904,8 +925,12 @@ export const dataStore = {
       Object.entries(newConfig.roomPrices).forEach(([rId, price]) => {
         const room = memStore.rooms.find((r) => r.id === rId);
         if (room && Number(price) > 0) {
-          room.pricePerNight = Number(price);
+          const numPrice = Number(price);
+          room.pricePerNight = numPrice;
           room.updatedAt = new Date().toISOString();
+          AccommodationService.updateAccommodationPrice(rId, numPrice).catch((e) =>
+            console.warn(`Supabase sync ${rId} price notice:`, e.message)
+          );
         }
       });
     }
@@ -921,7 +946,7 @@ export const dataStore = {
     return this.getPricingConfig();
   },
 
-  // PRICING CALCULATION WITH AVAILABILITY INTEGRATION
+  // PRICING CALCULATION WITH AVAILABILITY INTEGRATION & SUPABASE PRICING
   async getPricingQuote(input: {
     villaId: string;
     checkIn: string;
@@ -930,16 +955,51 @@ export const dataStore = {
     couponCode?: string;
     roomId?: string;
   }): Promise<PricingQuote & { isAvailable: boolean; message: string }> {
-    const villa = await this.getVilla(input.villaId);
+    const isEntireVilla = !input.roomId || input.roomId === 'entire-villa' || input.roomId === 'villa-suroor-main';
+    const targetAccommodationId = isEntireVilla ? 'entire-villa' : input.roomId!;
+
+    // 1. Retrieve the authoritative accommodation from Supabase
+    const accommodation = await AccommodationService.getAccommodationById(targetAccommodationId);
+
+    if (!accommodation || !accommodation.is_active) {
+      return {
+        villaId: input.villaId,
+        roomId: input.roomId,
+        accommodationName: isEntireVilla ? 'Entire Villa' : 'Selected Suite',
+        nightlyRate: 0,
+        checkIn: input.checkIn,
+        checkOut: input.checkOut,
+        nights: 0,
+        guestCount: input.guestCount,
+        baseNightlySum: 0,
+        extraGuestFee: 0,
+        cleaningFee: 0,
+        serviceFee: 0,
+        subtotal: 0,
+        discountAmount: 0,
+        taxableAmount: 0,
+        taxRate: 0,
+        taxAmount: 0,
+        totalAmount: 0,
+        currency: 'INR',
+        minStaySatisfied: false,
+        minStayNights: 1,
+        maxStaySatisfied: true,
+        dayBreakdown: [],
+        isValid: false,
+        isAvailable: false,
+        message: 'The requested accommodation is currently unavailable or inactive.',
+        validationError: 'The requested accommodation is currently unavailable or inactive.',
+      };
+    }
+
+    let villaBasePrice: number | undefined;
     let roomBasePrice: number | undefined;
 
-    if (input.roomId && input.roomId !== 'entire-villa') {
-      const room = memStore.rooms.find((r) => r.id === input.roomId);
-      if (room && room.pricePerNight) {
-        roomBasePrice = room.pricePerNight;
-      } else {
-        roomBasePrice = getRoomPrice(input.roomId);
-      }
+    if (isEntireVilla) {
+      villaBasePrice = accommodation.base_price_per_night;
+    } else {
+      roomBasePrice = accommodation.base_price_per_night;
     }
 
     let couponData: CouponData | null = null;
@@ -958,7 +1018,7 @@ export const dataStore = {
     );
 
     const baseQuote = calculateBookingPrice({
-      villaBasePrice: villa.basePrice || getEntireVillaPrice(),
+      villaBasePrice,
       roomBasePrice,
       pricingRules: memStore.pricingRules,
       coupon: couponData,

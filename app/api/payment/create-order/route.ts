@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { PaymentService } from '@/src/lib/paymentService';
+import { AccommodationService } from '@/src/lib/accommodationService';
 import { dataStore } from '@/src/lib/dataStore';
 
 export async function POST(req: NextRequest) {
@@ -32,6 +33,24 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         );
       }
+    }
+
+    // Verify accommodation is active in Supabase
+    const targetRoomId = booking.roomId || 'entire-villa';
+    const accommodation = await AccommodationService.getAccommodationById(targetRoomId);
+    if (!accommodation || !accommodation.is_active) {
+      return NextResponse.json(
+        { error: 'The accommodation for this booking is no longer active or available.' },
+        { status: 400 }
+      );
+    }
+
+    // Ensure totalAmount is valid and non-zero
+    if (!booking.totalAmount || booking.totalAmount <= 0) {
+      return NextResponse.json(
+        { error: 'Invalid booking amount calculated on server.' },
+        { status: 400 }
+      );
     }
 
     // Determine primary guest contact

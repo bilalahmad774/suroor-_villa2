@@ -6,11 +6,11 @@ import { Reveal } from '@/components/ui/reveal';
 import { SectionHeading } from '@/components/ui/section-heading';
 import { ArrowRight, X, BedDouble, Bath, Users, Eye, Mountain, Sparkles, Home } from 'lucide-react';
 import { rooms, entireVillaInfo } from '@/config/content';
-import { defaultPricingConfig, getEntireVillaPrice, getRoomPrice } from '@/config/pricingConfig';
 import { getCategoryGallery, getHeroImage, type ImageCategoryKey } from '@/config/imageConfig';
 import type { Room } from '@/types/domain';
 import { cn } from '@/lib/utils';
 import { useBooking } from '@/context/BookingContext';
+import { usePricing } from '@/hooks/usePricing';
 
 const roomImageMap: Record<string, ImageCategoryKey> = {
   'room-1': 'bedroom1',
@@ -21,8 +21,8 @@ const roomImageMap: Record<string, ImageCategoryKey> = {
 export function SuitesSection() {
   const [selected, setSelected] = useState<Room | null>(null);
   const { openBooking } = useBooking();
+  const { entireVillaPrice, roomPrice, getRoomPrice } = usePricing();
   const heroExterior = getHeroImage('exterior');
-  const entireVillaPrice = getEntireVillaPrice();
 
   return (
     <section id="suites" className="bg-background py-24 lg:py-32">
@@ -136,7 +136,7 @@ export function SuitesSection() {
               Or Choose an Individual Suite
             </h3>
             <p className="text-xs text-muted-foreground">
-              Standard rate: <strong className="text-foreground">₹{defaultPricingConfig.roomPricePerNight.toLocaleString('en-IN')} / night</strong> per individual suite.
+              Standard rate: <strong className="text-foreground">₹{roomPrice.toLocaleString('en-IN')} / night</strong> per individual suite.
             </p>
           </div>
 
@@ -217,6 +217,7 @@ export function SuitesSection() {
       {selected && (
         <RoomDetailModal
           room={selected}
+          price={getRoomPrice(selected.id)}
           images={getCategoryGallery(roomImageMap[selected.id])}
           onClose={() => setSelected(null)}
           onReserve={() => {
@@ -244,16 +245,17 @@ function Spec({ icon, label, value }: { icon: React.ReactNode; label: string; va
 
 function RoomDetailModal({
   room,
+  price,
   images,
   onClose,
   onReserve,
 }: {
   room: Room;
+  price: number;
   images: { src: string; alt: string; caption?: string }[];
   onClose: () => void;
   onReserve?: () => void;
 }) {
-  const price = getRoomPrice(room.id);
 
   return (
     <div
