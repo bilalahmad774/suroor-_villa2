@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useAuth } from '@/context/AuthContext';
 import {
   Dialog,
   DialogContent,
@@ -27,6 +28,7 @@ export function AuthModal({
   onSuccess,
   defaultTab = 'login',
 }: AuthModalProps) {
+  const { login } = useAuth();
   const [tab, setTab] = useState<'login' | 'register' | 'forgot'>(defaultTab);
   const [loading, setLoading] = useState(false);
 
@@ -50,14 +52,13 @@ export function AuthModal({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Login failed.');
 
-      if (data.token && typeof window !== 'undefined') {
-        localStorage.setItem('suroor_auth_token', data.token);
+      if (data.token && data.user) {
+        login(data.token, data.user);
       }
 
-      toast.success('Welcome back!', { description: `Logged in as ${data.user.fullName}` });
+      toast.success('Welcome back!', { description: `Logged in as ${data.user.fullName || data.user.email}` });
       if (onSuccess) onSuccess(data.user);
       onClose();
-      window.location.reload();
     } catch (err: any) {
       toast.error(err.message || 'Login failed.');
     } finally {
@@ -79,14 +80,13 @@ export function AuthModal({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Registration failed.');
 
-      if (data.token && typeof window !== 'undefined') {
-        localStorage.setItem('suroor_auth_token', data.token);
+      if (data.token && data.user) {
+        login(data.token, data.user);
       }
 
       toast.success('Account created successfully!', { description: 'Welcome to Suroor Villa' });
       if (onSuccess) onSuccess(data.user);
       onClose();
-      window.location.reload();
     } catch (err: any) {
       toast.error(err.message || 'Registration failed.');
     } finally {

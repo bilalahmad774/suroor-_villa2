@@ -8,22 +8,18 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ authenticated: false, user: null });
   }
 
-  // Fetch real record from database/store to ensure accurate name and data
+  // Fetch real record from database/store if available
   const realUser =
     (await dataStore.findUserById(session.id)) ||
     (await dataStore.findUserByEmail(session.email));
 
-  if (!realUser) {
-    return NextResponse.json({ authenticated: false, user: null });
-  }
-
   const userSession = {
-    id: realUser.id,
-    email: realUser.email,
-    fullName: realUser.fullName,
-    phone: realUser.phone || '',
-    role: (realUser.role?.name || realUser.role || 'CUSTOMER') as any,
-    isVerified: realUser.isVerified ?? true,
+    id: realUser ? realUser.id : session.id,
+    email: realUser ? realUser.email : session.email,
+    fullName: (realUser && realUser.fullName) ? realUser.fullName : session.fullName,
+    phone: realUser?.phone || '',
+    role: (realUser?.role?.name || realUser?.role || session.role || 'CUSTOMER') as any,
+    isVerified: realUser?.isVerified ?? session.isVerified ?? true,
   };
 
   return NextResponse.json({ authenticated: true, user: userSession });

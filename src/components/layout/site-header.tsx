@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Mountain, User, ShieldCheck, CalendarCheck, LogOut, Lock, Menu, X } from 'lucide-react';
@@ -10,6 +10,8 @@ import { navLinks } from '@/config/content';
 import { AuthModal } from '@/components/auth/auth-modal';
 import { BookingModal } from '@/components/booking/booking-modal';
 import { useBooking } from '@/context/BookingContext';
+import { useAuth } from '@/context/AuthContext';
+import { toast } from 'sonner';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,41 +25,10 @@ export function SiteHeader() {
   const [scrolled, setScrolled] = useState(false);
   const [open, setOpen] = useState(false);
   const { isBookingOpen, bookingOptions, openBooking, closeBooking } = useBooking();
+  const { user, isLoading: authLoading, logout } = useAuth();
 
   // Modals
   const [isAuthOpen, setIsAuthOpen] = useState(false);
-
-  // User session
-  const [user, setUser] = useState<any>(null);
-  const [authLoading, setAuthLoading] = useState(true);
-
-  const checkUserSession = useCallback(async () => {
-    try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('suroor_auth_token') : null;
-      const headers: Record<string, string> = {};
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-      const res = await fetch('/api/auth/me', { headers });
-      const data = await res.json();
-      if (data.authenticated && data.user) {
-        setUser(data.user);
-      } else {
-        setUser(null);
-        if (token && res.status === 401 && typeof window !== 'undefined') {
-          localStorage.removeItem('suroor_auth_token');
-        }
-      }
-    } catch {
-      setUser(null);
-    } finally {
-      setAuthLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    checkUserSession();
-  }, [checkUserSession]);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 24);
@@ -68,16 +39,19 @@ export function SiteHeader() {
 
   const handleLogout = async () => {
     try {
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem('suroor_auth_token');
-      }
-      await fetch('/api/auth/logout', { method: 'POST' });
-      setUser(null);
-      window.location.reload();
+      await logout();
+      toast.success('Signed out successfully.');
     } catch {
       // ignore
     }
   };
+
+  const displayName =
+    user?.fullName?.trim() ||
+    user?.name?.trim() ||
+    user?.email?.split('@')[0] ||
+    user?.email ||
+    'Guest';
 
   return (
     <>
@@ -138,45 +112,53 @@ export function SiteHeader() {
 
           {/* Right actions */}
           <div className="hidden items-center gap-3 lg:flex">
-            {user ? (
+            {authLoading ? (
+              <div
+                className={cn(
+                  'h-9 w-24 animate-pulse rounded-md',
+                  scrolled ? 'bg-muted/60' : 'bg-white/10'
+                )}
+                aria-label="Loading session"
+              />
+            ) : user ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="outline"
                     className={cn(
-                      'gap-2 text-xs font-medium',
+                      'gap-2 text-xs font-medium max-w-[200px]',
                       scrolled ? 'border-border text-foreground' : 'border-white/40 text-white bg-white/5'
                     )}
                   >
-                    <User className="h-3.5 w-3.5 text-accent" />
-                    <span>{user.fullName.split(' ')[0]}</span>
+                    <User className="h-3.5 w-3.5 text-accent shrink-0" />
+                    <span className="truncate">{displayName}</span>
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56 bg-card border-border">
+                <DropdownMenuContent align="end" className="w-56 bg-card border-border shadow-xl">
                   <DropdownMenuLabel className="font-serif">
-                    <p className="text-sm font-bold">{user.fullName}</p>
-                    <p className="text-xs text-muted-foreground font-sans font-normal">{user.email}</p>
+                    <p className="text-sm font-semibold truncate">{displayName}</p>
+                    <p className="text-xs text-muted-foreground font-sans font-normal truncate">{user.email}</p>
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <Link href="/dashboard" className="cursor-pointer flex items-center">
+                      <User className="w-4 h-4 mr-2 text-accent" /> Profile
+                    </Link>
+                  </DropdownMenuItem>
                   <DropdownMenuItem asChild>
                     <Link href="/my-bookings" className="cursor-pointer flex items-center">
                       <CalendarCheck className="w-4 h-4 mr-2 text-accent" /> My Bookings
                     </Link>
                   </DropdownMenuItem>
-                  <DropdownMenuItem asChild>
-                    <Link href="/dashboard" className="cursor-pointer flex items-center">
-                      <User className="w-4 h-4 mr-2 text-accent" /> Customer Dashboard
-                    </Link>
-                  </DropdownMenuItem>
                   {(user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') && (
                     <DropdownMenuItem asChild>
-                      <Link href="/admin" className="cursor-pointer flex items-center font-bold text-accent">
+                      <Link href="/admin" className="cursor-pointer flex items-center font-semibold text-accent">
                         <ShieldCheck className="w-4 h-4 mr-2" /> Admin Portal
                       </Link>
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={handleLogout} className="cursor-pointer text-destructive">
+                  <DropdownMenuItem onClick={handleLogout} className="cursor-pointer text-destructive focus:text-destructive">
                     <LogOut className="w-4 h-4 mr-2" /> Sign Out
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -282,18 +264,26 @@ export function SiteHeader() {
                 )}
 
                 <div className="pt-3 flex flex-col gap-2">
-                  {user ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        setOpen(false);
-                        handleLogout();
-                      }}
-                      className="w-full text-destructive justify-center text-xs"
-                    >
-                      <LogOut className="w-3.5 h-3.5 mr-1" /> Sign Out ({user.fullName.split(' ')[0]})
-                    </Button>
+                  {authLoading ? (
+                    <div className="h-9 w-full animate-pulse rounded-md bg-muted/50" />
+                  ) : user ? (
+                    <>
+                      <div className="px-2 py-1.5 text-xs border-b border-border/40 flex items-center justify-between">
+                        <span className="font-semibold text-foreground truncate">{displayName}</span>
+                        <span className="text-[11px] truncate max-w-[150px] text-muted-foreground">{user.email}</span>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setOpen(false);
+                          handleLogout();
+                        }}
+                        className="w-full text-destructive justify-center text-xs"
+                      >
+                        <LogOut className="w-3.5 h-3.5 mr-1" /> Sign Out
+                      </Button>
+                    </>
                   ) : (
                     <Button
                       variant="outline"
@@ -304,7 +294,7 @@ export function SiteHeader() {
                       }}
                       className="w-full justify-center text-xs"
                     >
-                      <Lock className="w-3.5 h-3.5 mr-1 text-accent" /> Guest Sign In / Register
+                      <Lock className="w-3.5 h-3.5 mr-1 text-accent" /> Sign In
                     </Button>
                   )}
 
@@ -329,7 +319,6 @@ export function SiteHeader() {
       <AuthModal
         isOpen={isAuthOpen}
         onClose={() => setIsAuthOpen(false)}
-        onSuccess={(u) => setUser(u)}
       />
 
       <BookingModal

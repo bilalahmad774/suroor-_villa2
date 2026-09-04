@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import { Inter, Cormorant_Garamond } from 'next/font/google';
 import { Toaster } from '@/components/ui/sonner';
 import { BookingProvider } from '@/context/BookingContext';
+import { AuthProvider } from '@/context/AuthContext';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
 const cormorant = Cormorant_Garamond({
@@ -111,10 +112,12 @@ export default function RootLayout({
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
         />
-        <BookingProvider>
-          {children}
-          <Toaster />
-        </BookingProvider>
+        <AuthProvider>
+          <BookingProvider>
+            {children}
+            <Toaster />
+          </BookingProvider>
+        </AuthProvider>
       </body>
     </html>
   );

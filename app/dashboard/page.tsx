@@ -100,6 +100,16 @@ export default function CustomerDashboardPage() {
         setProfile(data.profile);
         setFullName(data.profile.fullName || '');
         setPhone(data.profile.phone || '');
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem('suroor_user', JSON.stringify(data.profile));
+            window.dispatchEvent(
+              new CustomEvent('suroor-auth-changed', {
+                detail: { user: data.profile },
+              })
+            );
+          } catch {}
+        }
       }
       toast.success('Profile updated successfully.');
     } catch (err: any) {
