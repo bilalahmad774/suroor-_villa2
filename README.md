@@ -23,7 +23,7 @@ A five-star luxury hospitality booking and estate management web application for
 - **Framework**: Next.js 15 (App Router, Server Actions, API Routes)
 - **Language**: TypeScript
 - **Styling**: Tailwind CSS, Lucide Icons, Framer Motion
-- **State & Data**: Unified persistent in-memory data store with optional Prisma/Supabase bindings
+- **State & Data**: Supabase PostgreSQL persistence with resilient dataStore fallbacks
 - **Payments**: Razorpay Node SDK & Stripe SDK
 - **Email**: Resend API
 - **Deployment**: Vercel & Node.js Standalone

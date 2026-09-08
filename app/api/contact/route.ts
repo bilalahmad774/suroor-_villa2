@@ -7,7 +7,7 @@ export async function POST(req: NextRequest) {
     const clientIp = req.headers.get('x-forwarded-for') || '127.0.0.1';
 
     // 1. Spam Protection & Rate Limiting Check
-    if (!dataStore.checkContactRateLimit(clientIp)) {
+    if (!(await dataStore.checkContactRateLimit(clientIp))) {
       return NextResponse.json(
         { error: 'Too many messages sent. Please wait 10 minutes before submitting another inquiry.' },
         { status: 429 }
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 3. Record Contact Message in DataStore
-    const contactRecord = dataStore.addContactMessage({
+    const contactRecord = await dataStore.addContactMessage({
       name: name.trim(),
       email: email.trim(),
       phone: phone ? phone.trim() : '',

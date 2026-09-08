@@ -14,7 +14,7 @@ export async function GET(
       return new NextResponse('Missing booking ID', { status: 400 });
     }
 
-    const booking = dataStore.getBookingById(bookingId);
+    const booking = await dataStore.getBookingById(bookingId);
     if (!booking) {
       return new NextResponse('Booking not found', { status: 404 });
     }

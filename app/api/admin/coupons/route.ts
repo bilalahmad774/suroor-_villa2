@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dataStore, memStore } from '@/lib/dataStore';
+import { dataStore } from '@/lib/dataStore';
 import { getSessionUser } from '@/lib/auth';
 
 export async function GET(req: NextRequest) {
@@ -9,7 +9,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Forbidden. Admin access required.' }, { status: 403 });
     }
 
-    return NextResponse.json({ success: true, coupons: memStore.coupons });
+    const coupons = await dataStore.getCoupons();
+    return NextResponse.json({ success: true, coupons });
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'Error fetching coupons' }, { status: 500 });
   }
@@ -23,8 +24,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const newCoupon = {
-      id: `cpn-${Date.now()}`,
+    const newCoupon = await dataStore.createCoupon({
       code: body.code.toUpperCase(),
       description: body.description || '',
       discountType: body.discountType || 'PERCENTAGE',
@@ -36,9 +36,7 @@ export async function POST(req: NextRequest) {
       usageLimit: Number(body.usageLimit || 100),
       usedCount: 0,
       isActive: true,
-    };
-
-    memStore.coupons.push(newCoupon);
+    });
 
     dataStore.addAuditLog({
       userId: user.id,

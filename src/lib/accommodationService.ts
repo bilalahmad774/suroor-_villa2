@@ -20,6 +20,7 @@ export class AccommodationService {
   static async getAllAccommodations(): Promise<AccommodationRecord[]> {
     const supabase = getSupabaseServerClient();
     if (!supabase) {
+      console.error('[AccommodationService] Supabase server client unavailable: database credentials not configured.');
       return [];
     }
 
@@ -70,6 +71,7 @@ export class AccommodationService {
     const supabase = getSupabaseServerClient();
 
     if (!supabase) {
+      console.error(`[AccommodationService] Supabase server client unavailable. Cannot fetch accommodation '${id}'.`);
       return null;
     }
 

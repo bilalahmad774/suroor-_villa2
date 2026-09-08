@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/src/lib/supabaseClient';
+import { isSupabaseConfigured, getSupabaseBrowserClient } from '@/src/lib/supabaseClient';
 import type { PricingConfig } from '@/config/pricingConfig';
 
 export interface AccommodationItem {
@@ -46,7 +46,16 @@ export function usePricing() {
       }
 
       // 2. Direct browser-side fallback query to Supabase public.accommodations
-      const { data: sbData, error: sbError } = await supabase
+      if (!isSupabaseConfigured()) {
+        throw new Error('Real-time database pricing is currently unavailable.');
+      }
+
+      const client = getSupabaseBrowserClient();
+      if (!client) {
+        throw new Error('Supabase client unavailable.');
+      }
+
+      const { data: sbData, error: sbError } = await client
         .from('accommodations')
         .select('id, name, type, base_price_per_night, currency, capacity, is_active, updated_at')
         .order('id', { ascending: true });

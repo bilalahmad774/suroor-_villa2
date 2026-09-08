@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
       const bookingId = notes.bookingId;
 
       if (bookingId) {
-        const booking = dataStore.getBookingById(bookingId);
+        const booking = await dataStore.getBookingById(bookingId);
         if (booking && booking.status !== 'CONFIRMED') {
           await dataStore.confirmPaymentAndBooking({
             bookingId: booking.id,

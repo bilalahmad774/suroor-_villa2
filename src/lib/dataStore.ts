@@ -1,11 +1,9 @@
-import fs from 'fs';
-import path from 'path';
 import crypto from 'crypto';
-import { prisma } from './db';
 import { hashPassword, comparePassword } from './auth';
 import { calculateBookingPrice, Rule, CouponData, PricingQuote } from './pricingEngine';
 import { defaultPricingConfig, getRoomPrice, getEntireVillaPrice, PricingConfig } from '@/config/pricingConfig';
 import { AccommodationService } from './accommodationService';
+import { SupabaseDatabase } from './supabaseDatabase';
 import { format, parseISO, addMinutes } from 'date-fns';
 
 export function normalizeDateOnly(dateStrOrObj: string | Date | null | undefined): string {
@@ -29,10 +27,6 @@ export function normalizeDateOnly(dateStrOrObj: string | Date | null | undefined
   return d.toISOString().split('T')[0];
 }
 
-// Persistent Storage File Path
-const DATA_DIR = path.join(process.cwd(), 'data');
-const DB_FILE = path.join(DATA_DIR, 'db.json');
-
 // Async Mutex for thread-safe atomic booking transactions
 class AsyncMutex {
   private mutex = Promise.resolve();
@@ -49,6 +43,19 @@ class AsyncMutex {
 }
 
 const bookingMutex = new AsyncMutex();
+
+export type User = any;
+export type Villa = any;
+export type Room = any;
+export type Booking = any;
+export type Guest = any;
+export type Payment = any;
+export type Invoice = any;
+export type AuditLog = any;
+export type PricingRule = Rule | any;
+export type Coupon = CouponData | any;
+export type Review = any;
+export type ContactMessage = any;
 
 export interface StoreData {
   users: any[];
@@ -160,58 +167,13 @@ class PersistentStore {
   set passwordResetTokens(v) { this.data.passwordResetTokens = v; }
 
   loadFromDisk() {
-    try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-      }
-
-      if (fs.existsSync(DB_FILE)) {
-        const fileContent = fs.readFileSync(DB_FILE, 'utf-8');
-        if (fileContent && fileContent.trim().length > 0) {
-          const parsed = JSON.parse(fileContent);
-          this.data = {
-            users: Array.isArray(parsed.users) ? parsed.users : [],
-            villas: Array.isArray(parsed.villas) ? parsed.villas : [],
-            rooms: Array.isArray(parsed.rooms) ? parsed.rooms : [],
-            amenities: Array.isArray(parsed.amenities) ? parsed.amenities : [],
-            gallery: Array.isArray(parsed.gallery) ? parsed.gallery : [],
-            bookings: Array.isArray(parsed.bookings) ? parsed.bookings : [],
-            guests: Array.isArray(parsed.guests) ? parsed.guests : [],
-            availabilities: Array.isArray(parsed.availabilities) ? parsed.availabilities : [],
-            pricingRules: Array.isArray(parsed.pricingRules) ? parsed.pricingRules : [],
-            coupons: Array.isArray(parsed.coupons) ? parsed.coupons : [],
-            payments: Array.isArray(parsed.payments) ? parsed.payments : [],
-            invoices: Array.isArray(parsed.invoices) ? parsed.invoices : [],
-            cancellations: Array.isArray(parsed.cancellations) ? parsed.cancellations : [],
-            refunds: Array.isArray(parsed.refunds) ? parsed.refunds : [],
-            reviews: Array.isArray(parsed.reviews) ? parsed.reviews : [],
-            notifications: Array.isArray(parsed.notifications) ? parsed.notifications : [],
-            contactMessages: Array.isArray(parsed.contactMessages) ? parsed.contactMessages : [],
-            auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : [],
-            passwordResetTokens: Array.isArray(parsed.passwordResetTokens) ? parsed.passwordResetTokens : [],
-          };
-          this.initialized = true;
-          return;
-        }
-      }
-    } catch (err) {
-      console.error('[PersistentStore] Error loading DB from disk:', err);
-    }
-
-    // If no existing db file or error, seed default initial data and save
+    // Initialize in-memory state with seed data for fast synchronous fallback
     this.seedInitialData();
   }
 
   saveToDisk() {
-    try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-      }
-      const serialized = JSON.stringify(this.data, null, 2);
-      fs.writeFileSync(DB_FILE, serialized, 'utf-8');
-    } catch (err) {
-      console.error('[PersistentStore] Error saving DB to disk:', err);
-    }
+    // Durable persistence is handled via Supabase PostgreSQL tables.
+    // In-memory changes remain in memory for the lifecycle of the instance.
   }
 
   seedInitialData() {
@@ -571,27 +533,19 @@ export const dataStore = {
   async findUserByEmail(email: string) {
     if (!email) return null;
     const cleanEmail = email.trim().toLowerCase();
-    try {
-      if (process.env.DATABASE_URL) {
-        return await prisma.user.findUnique({
-          where: { email: cleanEmail },
-          include: { role: true },
-        });
-      }
-    } catch {}
+    if (SupabaseDatabase.isAvailable()) {
+      const dbUser = await SupabaseDatabase.findUserByEmail(cleanEmail);
+      if (dbUser) return dbUser;
+    }
     return memStore.users.find((u) => u.email.toLowerCase().trim() === cleanEmail) || null;
   },
 
   async findUserById(id: string) {
     if (!id) return null;
-    try {
-      if (process.env.DATABASE_URL) {
-        return await prisma.user.findUnique({
-          where: { id },
-          include: { role: true },
-        });
-      }
-    } catch {}
+    if (SupabaseDatabase.isAvailable()) {
+      const dbUser = await SupabaseDatabase.findUserById(id);
+      if (dbUser) return dbUser;
+    }
     return memStore.users.find((u) => u.id === id) || null;
   },
 
@@ -616,24 +570,23 @@ export const dataStore = {
       updatedAt: new Date().toISOString(),
     };
 
-    try {
-      if (process.env.DATABASE_URL) {
-        let roleRecord = await prisma.role.findFirst({ where: { name: role as any } });
-        if (!roleRecord) {
-          roleRecord = await prisma.role.create({ data: { name: role as any } });
-        }
-        return await prisma.user.create({
-          data: {
-            email: cleanEmail,
-            passwordHash: data.passwordHash,
-            fullName: data.fullName.trim(),
-            phone: data.phone,
-            isVerified: true,
-            roleId: roleRecord.id,
-          },
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const created = await SupabaseDatabase.createUser({
+          email: cleanEmail,
+          passwordHash: data.passwordHash,
+          fullName: data.fullName.trim(),
+          phone: data.phone,
+          role,
         });
+        if (created) {
+          memStore.users.push(created);
+          return created;
+        }
+      } catch (err) {
+        console.warn('[dataStore] Supabase createUser fallback:', err);
       }
-    } catch {}
+    }
 
     memStore.users.push(newUser);
     memStore.saveToDisk();
@@ -641,20 +594,28 @@ export const dataStore = {
   },
 
   async updateUserPassword(userId: string, newPasswordHash: string) {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const updated = await SupabaseDatabase.updateUserPassword(userId, newPasswordHash);
+        if (updated) {
+          const user = memStore.users.find((u) => u.id === userId);
+          if (user) {
+            user.passwordHash = newPasswordHash;
+            user.updatedAt = new Date().toISOString();
+          }
+          return updated;
+        }
+      } catch (err) {
+        console.warn('[dataStore] Supabase updateUserPassword fallback:', err);
+      }
+    }
+
     const user = memStore.users.find((u) => u.id === userId);
     if (user) {
       user.passwordHash = newPasswordHash;
       user.updatedAt = new Date().toISOString();
       memStore.saveToDisk();
     }
-    try {
-      if (process.env.DATABASE_URL) {
-        await prisma.user.update({
-          where: { id: userId },
-          data: { passwordHash: newPasswordHash },
-        });
-      }
-    } catch {}
     return user || null;
   },
 
@@ -662,6 +623,11 @@ export const dataStore = {
   async createPasswordResetToken(email: string) {
     const user = await this.findUserByEmail(email);
     if (!user) return null;
+
+    if (SupabaseDatabase.isAvailable()) {
+      const res = await SupabaseDatabase.createPasswordResetToken(email);
+      if (res) return res;
+    }
 
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
@@ -690,6 +656,11 @@ export const dataStore = {
   async verifyPasswordResetToken(token: string) {
     if (!token) return { valid: false, error: 'Token is required.' };
 
+    if (SupabaseDatabase.isAvailable()) {
+      const res = await SupabaseDatabase.verifyPasswordResetToken(token);
+      if (res.valid) return res;
+    }
+
     const record = memStore.passwordResetTokens.find((r) => r.token === token);
     if (!record) {
       return { valid: false, error: 'Invalid or unrecognized reset token.' };
@@ -707,7 +678,18 @@ export const dataStore = {
     return { valid: true, record };
   },
 
-  async consumePasswordResetToken(token: string, newPasswordHash: string) {
+  async consumePasswordResetToken(
+    token: string,
+    newPasswordHash: string
+  ): Promise<{ success: boolean; message?: string; error?: string }> {
+    if (SupabaseDatabase.isAvailable()) {
+      const res = await SupabaseDatabase.consumePasswordResetToken(token, newPasswordHash);
+      if (res.success) {
+        return { success: true, message: 'Password has been successfully updated.' };
+      }
+      return { success: false, error: res.error || 'Failed to reset password.' };
+    }
+
     const verification = await this.verifyPasswordResetToken(token);
     if (!verification.valid || !verification.record) {
       return { success: false, error: verification.error || 'Invalid reset token.' };
@@ -733,15 +715,10 @@ export const dataStore = {
 
   // VILLAS & ROOMS
   async getVilla(idOrSlug = 'villa-suroor-main') {
-    try {
-      if (process.env.DATABASE_URL) {
-        const dbVilla = await prisma.villa.findFirst({
-          where: { OR: [{ id: idOrSlug }, { slug: idOrSlug }] },
-          include: { rooms: true, amenities: true, gallery: true },
-        });
-        if (dbVilla) return dbVilla;
-      }
-    } catch {}
+    if (SupabaseDatabase.isAvailable()) {
+      const v = await SupabaseDatabase.getVilla(idOrSlug);
+      if (v) return v;
+    }
 
     const v = memStore.villas[0] || {
       id: 'villa-suroor-main',
@@ -762,10 +739,9 @@ export const dataStore = {
   // Rule 3: Two half-open intervals [targetIn, targetOut) and [bIn, bOut) overlap iff: targetIn < bOut AND targetOut > bIn.
   // Rule 4: If dates overlap, return message: "Not available for these dates."
   // Rule 5: If dates do not overlap, return message: "Available."
-  async checkAvailability(villaId: string, checkIn: string, checkOut: string, roomId?: string) {
+  async checkAvailability(villaId: string, checkIn: string, checkOut: string, roomId?: string, excludeBookingId?: string) {
     const targetIn = normalizeDateOnly(checkIn);
     const targetOut = normalizeDateOnly(checkOut);
-    const now = new Date().getTime();
 
     if (!targetIn || !targetOut || targetIn >= targetOut) {
       return {
@@ -773,6 +749,18 @@ export const dataStore = {
         message: 'Not available for these dates.',
         reason: 'Check-out date must be after check-in date.',
       };
+    }
+
+    // Check database availability via Supabase if configured
+    if (SupabaseDatabase.isAvailable()) {
+      const dbAvail = await SupabaseDatabase.checkAvailability(villaId, checkIn, checkOut, roomId, excludeBookingId);
+      if (!dbAvail.available) {
+        return {
+          available: false,
+          message: 'Not available for these dates.',
+          reason: dbAvail.reason || 'Selected dates overlap with an existing reservation.',
+        };
+      }
     }
 
     // 1. Check manually blocked dates in Availability table
@@ -793,6 +781,7 @@ export const dataStore = {
     // 2. Check existing confirmed or active paid bookings ONLY
     const overlappingBookings = memStore.bookings.filter((b) => {
       if (b.villaId !== villaId) return false;
+      if (excludeBookingId && (b.id === excludeBookingId || b.referenceCode === excludeBookingId)) return false;
 
       // Only CONFIRMED bookings or PAID bookings occupy dates
       if (b.status !== 'CONFIRMED' && b.paymentStatus !== 'PAID') return false;
@@ -830,6 +819,17 @@ export const dataStore = {
 
   // GET BOOKED & BLOCKED DATE RANGES FOR CALENDARS
   async getBookedDateRanges(villaId: string = 'villa-suroor-main', roomId?: string) {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const ranges = await SupabaseDatabase.getBookedDateRanges(villaId, roomId);
+        if (ranges && ranges.bookedRanges.length > 0) {
+          return ranges;
+        }
+      } catch (err) {
+        console.warn('[dataStore] Supabase getBookedDateRanges fallback:', err);
+      }
+    }
+
     const now = new Date().getTime();
     const activeBookings = memStore.bookings.filter((b) => {
       if (b.villaId !== villaId) return false;
@@ -1065,7 +1065,7 @@ export const dataStore = {
     couponCode?: string;
     userId?: string;
   }) {
-    // Acquire mutex lock to prevent concurrent race conditions
+    // Acquire mutex lock to prevent concurrent race conditions in-process
     const unlock = await bookingMutex.lock();
 
     try {
@@ -1097,6 +1097,72 @@ export const dataStore = {
 
       const refCode = `SUR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
       const lockExpiresAt = addMinutes(new Date(), 15).toISOString(); // 15-minute temporary payment hold lock
+      const newBookingId = `bk-${Date.now()}`;
+
+      // If Supabase is available, persist via Supabase database
+      if (SupabaseDatabase.isAvailable()) {
+        try {
+          const couponId = quote.couponCode
+            ? (await SupabaseDatabase.getCoupons()).find((c) => c.code === quote.couponCode)?.id || null
+            : null;
+
+          const result = await SupabaseDatabase.createBooking({
+            bookingId: newBookingId,
+            referenceCode: refCode,
+            userId: data.userId,
+            villaId: data.villaId,
+            roomId: data.roomId,
+            checkIn: normalizeDateOnly(data.checkIn),
+            checkOut: normalizeDateOnly(data.checkOut),
+            nights: quote.nights,
+            guestCount: data.guestCount,
+            adults: data.adults,
+            children: data.children,
+            baseAmount: quote.baseNightlySum,
+            extraGuestFee: quote.extraGuestFee,
+            cleaningFee: quote.cleaningFee,
+            serviceFee: quote.serviceFee,
+            discountAmount: quote.discountAmount,
+            taxAmount: quote.taxAmount,
+            totalAmount: quote.totalAmount,
+            currency: 'INR',
+            lockExpiresAt,
+            notes: data.notes,
+            couponId: couponId || undefined,
+            guest: data.primaryGuest,
+            additionalGuests: data.additionalGuests,
+          });
+
+          if (result && result.booking) {
+            memStore.bookings.push(result.booking);
+            memStore.guests.push(result.guest);
+            this.addAuditLog({
+              userId: data.userId || 'GUEST',
+              action: 'CREATE_BOOKING_HOLD',
+              entity: 'Booking',
+              entityId: result.booking.id,
+              details: `Created reservation hold ${refCode} for ${result.guest.fullName} (${result.booking.checkIn} to ${result.booking.checkOut})`,
+            });
+            return {
+              booking: result.booking,
+              primaryGuest: result.guest,
+              quote,
+            };
+          }
+        } catch (dbErr: any) {
+          console.error('[dataStore] Supabase createBooking error:', dbErr);
+          throw dbErr;
+        }
+      }
+
+      if (!SupabaseDatabase.isAvailable() && process.env.NODE_ENV === 'production') {
+        console.error(
+          '[dataStore] Production database unavailable: Supabase credentials are not configured. Refusing in-memory ephemeral booking creation.'
+        );
+        throw new Error(
+          'Reservation service is temporarily offline: persistent database is not configured. Please contact reservations directly.'
+        );
+      }
 
       const newBooking = {
         id: `bk-${Date.now()}`,
@@ -1166,7 +1232,6 @@ export const dataStore = {
         details: `Created reservation hold ${refCode} for ${primaryGuest.fullName} (${newBooking.checkIn} to ${newBooking.checkOut})`,
       });
 
-      // Save updated state synchronously to durable disk
       memStore.saveToDisk();
 
       return { booking: newBooking, primaryGuest, quote };
@@ -1183,6 +1248,27 @@ export const dataStore = {
     amount: number;
     gatewayResponse?: any;
   }) {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const res = await SupabaseDatabase.confirmPaymentAndBooking(data);
+        if (res && res.booking) {
+          // Sync in-memory mirror
+          const existing = memStore.bookings.find((b) => b.id === res.booking.id || b.referenceCode === res.booking.id);
+          if (existing) {
+            Object.assign(existing, res.booking);
+          } else {
+            memStore.bookings.push(res.booking);
+          }
+          if (res.payment) memStore.payments.push(res.payment);
+          if (res.invoice) memStore.invoices.push(res.invoice);
+          return res;
+        }
+      } catch (err: any) {
+        console.error('[dataStore] Supabase confirmPaymentAndBooking error:', err);
+        throw err;
+      }
+    }
+
     const booking = memStore.bookings.find(
       (b) => b.id === data.bookingId || b.referenceCode === data.bookingId
     );
@@ -1261,6 +1347,22 @@ export const dataStore = {
 
   // RELEASE TEMPORARY BOOKING HOLD
   async releaseBookingHold(bookingId: string) {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const released = await SupabaseDatabase.releaseBookingHold(bookingId);
+        if (released) {
+          const m = memStore.bookings.find((b) => b.id === bookingId || b.referenceCode === bookingId);
+          if (m) {
+            m.status = 'CANCELLED';
+            m.lockExpiresAt = null;
+          }
+          return released;
+        }
+      } catch (err) {
+        console.warn('[dataStore] Supabase releaseBookingHold fallback:', err);
+      }
+    }
+
     const booking = memStore.bookings.find(
       (b) => b.id === bookingId || b.referenceCode === bookingId
     );
@@ -1282,8 +1384,17 @@ export const dataStore = {
   },
 
   // RETRIEVE BOOKING BY ID OR REF
-  getBookingById(idOrRef: string) {
+  async getBookingById(idOrRef: string) {
     if (!idOrRef || typeof idOrRef !== 'string') return null;
+
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const dbBooking = await SupabaseDatabase.getBookingById(idOrRef);
+        if (dbBooking) return dbBooking;
+      } catch (err) {
+        console.warn('[dataStore] Supabase getBookingById fallback:', err);
+      }
+    }
 
     const query = idOrRef.trim().toUpperCase();
     const booking = memStore.bookings.find(
@@ -1322,8 +1433,21 @@ export const dataStore = {
   },
 
   // UPDATE BOOKING FIELDS
-  updateBooking(bookingId: string, updates: Partial<any>) {
+  async updateBooking(bookingId: string, updates: Partial<any>) {
     if (!bookingId || typeof bookingId !== 'string') return null;
+
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const updated = await SupabaseDatabase.updateBooking(bookingId, updates);
+        if (updated) {
+          const m = memStore.bookings.find((b) => b.id === bookingId || b.referenceCode === bookingId);
+          if (m) Object.assign(m, updates);
+          return updated;
+        }
+      } catch (err) {
+        console.warn('[dataStore] Supabase updateBooking fallback:', err);
+      }
+    }
 
     const query = bookingId.trim().toUpperCase();
     const booking = memStore.bookings.find(
@@ -1339,7 +1463,15 @@ export const dataStore = {
   },
 
   // CONTACT FORM & SPAM RATE LIMITING
-  checkContactRateLimit(ip = '127.0.0.1'): boolean {
+  async checkContactRateLimit(ip = '127.0.0.1'): Promise<boolean> {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        return await SupabaseDatabase.checkContactRateLimit(ip);
+      } catch (err) {
+        console.warn('[dataStore] Supabase checkContactRateLimit fallback:', err);
+      }
+    }
+
     const recentFromIp = memStore.contactMessages.filter((m) => {
       if (m.ip !== ip) return false;
       const diffMinutes = (Date.now() - new Date(m.createdAt).getTime()) / (1000 * 60);
@@ -1349,7 +1481,19 @@ export const dataStore = {
     return recentFromIp.length < 5;
   },
 
-  addContactMessage(msg: { name: string; email: string; phone?: string; subject?: string; message: string; ip?: string }) {
+  async addContactMessage(msg: { name: string; email: string; phone?: string; subject?: string; message: string; ip?: string }) {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const created = await SupabaseDatabase.addContactMessage(msg);
+        if (created) {
+          memStore.contactMessages.unshift(created);
+          return created;
+        }
+      } catch (err) {
+        console.warn('[dataStore] Supabase addContactMessage fallback:', err);
+      }
+    }
+
     const newMsg = {
       id: `msg-${Date.now()}`,
       name: msg.name,
@@ -1368,8 +1512,18 @@ export const dataStore = {
   },
 
   // USER PROFILE MANAGEMENT
-  getUserProfile(userIdOrEmail: string) {
+  async getUserProfile(userIdOrEmail: string) {
     if (!userIdOrEmail) return null;
+
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const profile = await SupabaseDatabase.getUserProfile(userIdOrEmail);
+        if (profile) return profile;
+      } catch (err) {
+        console.warn('[dataStore] Supabase getUserProfile fallback:', err);
+      }
+    }
+
     const clean = userIdOrEmail.trim().toLowerCase();
     const user = memStore.users.find(
       (u) => u.id === userIdOrEmail || (u.email && u.email.toLowerCase() === clean)
@@ -1392,8 +1546,18 @@ export const dataStore = {
     };
   },
 
-  updateUserProfile(userIdOrEmail: string, data: { fullName?: string; phone?: string; passwordHash?: string }) {
+  async updateUserProfile(userIdOrEmail: string, data: { fullName?: string; phone?: string; passwordHash?: string }) {
     if (!userIdOrEmail) return null;
+
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const updated = await SupabaseDatabase.updateUserProfile(userIdOrEmail, data);
+        if (updated) return updated;
+      } catch (err) {
+        console.warn('[dataStore] Supabase updateUserProfile fallback:', err);
+      }
+    }
+
     const clean = userIdOrEmail.trim().toLowerCase();
     const user = memStore.users.find(
       (u) => u.id === userIdOrEmail || (u.email && u.email.toLowerCase() === clean)
@@ -1416,11 +1580,31 @@ export const dataStore = {
   },
 
   // REVIEWS ENGINE
-  listReviews() {
+  async listReviews() {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const revs = await SupabaseDatabase.listReviews();
+        if (revs && revs.length > 0) return revs;
+      } catch (err) {
+        console.warn('[dataStore] Supabase listReviews fallback:', err);
+      }
+    }
     return [...memStore.reviews];
   },
 
-  addReview(rev: { villaId?: string; guestName: string; rating: number; comment: string; userEmail?: string }) {
+  async addReview(rev: { villaId?: string; guestName: string; rating: number; comment: string; userEmail?: string }) {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const created = await SupabaseDatabase.addReview(rev);
+        if (created) {
+          memStore.reviews.unshift(created);
+          return created;
+        }
+      } catch (err) {
+        console.warn('[dataStore] Supabase addReview fallback:', err);
+      }
+    }
+
     const newReview = {
       id: `rev-${Date.now()}`,
       villaId: rev.villaId || 'villa-suroor-main',
@@ -1440,6 +1624,24 @@ export const dataStore = {
 
   // CANCEL BOOKING
   async cancelBooking(bookingId: string, reason: string, notes?: string, cancelledBy = 'CUSTOMER') {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const res = await SupabaseDatabase.cancelBooking(bookingId, reason, notes, cancelledBy);
+        if (res && res.booking) {
+          const m = memStore.bookings.find((b) => b.id === res.booking.id || b.referenceCode === res.booking.id);
+          if (m) {
+            m.status = 'CANCELLED';
+            m.paymentStatus = 'REFUNDED';
+          }
+          if (res.cancellation) memStore.cancellations.push(res.cancellation);
+          return res;
+        }
+      } catch (err: any) {
+        console.error('[dataStore] Supabase cancelBooking error:', err);
+        throw err;
+      }
+    }
+
     const booking = memStore.bookings.find(
       (b) => b.id === bookingId || b.referenceCode === bookingId
     );
@@ -1477,6 +1679,14 @@ export const dataStore = {
 
   // LIST BOOKINGS FOR ADMIN OR USER
   async listBookings(filters?: { userId?: string; status?: string; search?: string }) {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        return await SupabaseDatabase.listBookings(filters);
+      } catch (err) {
+        console.warn('[dataStore] Supabase listBookings fallback:', err);
+      }
+    }
+
     let result = [...memStore.bookings];
 
     if (filters?.userId) {
@@ -1516,6 +1726,12 @@ export const dataStore = {
 
   // AUDIT LOG HELPER
   addAuditLog(data: { userId?: string; action: string; entity: string; entityId?: string; details?: string; ipAddress?: string }) {
+    if (SupabaseDatabase.isAvailable()) {
+      SupabaseDatabase.addAuditLog(data).catch((e) =>
+        console.warn('[dataStore] Supabase addAuditLog async notice:', e.message)
+      );
+    }
+
     memStore.auditLogs.unshift({
       id: `log-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       userId: data.userId || 'SYSTEM',
@@ -1527,5 +1743,84 @@ export const dataStore = {
       createdAt: new Date().toISOString(),
     });
     memStore.saveToDisk();
+  },
+
+  // GET AUDIT LOGS
+  async getAuditLogs(limit = 100) {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const logs = await SupabaseDatabase.getAuditLogs(limit);
+        if (logs && logs.length > 0) return logs;
+      } catch (err) {
+        console.warn('[dataStore] Supabase getAuditLogs fallback:', err);
+      }
+    }
+    return memStore.auditLogs.slice(0, limit);
+  },
+
+  // PRICING RULES
+  async getPricingRules(): Promise<Rule[]> {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const rules = await SupabaseDatabase.getPricingRules();
+        if (rules && rules.length > 0) return rules;
+      } catch (err) {
+        console.warn('[dataStore] Supabase getPricingRules fallback:', err);
+      }
+    }
+    return memStore.pricingRules;
+  },
+
+  async createPricingRule(rule: Omit<Rule, 'id'>): Promise<Rule> {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const created = await SupabaseDatabase.createPricingRule(rule);
+        if (created) {
+          memStore.pricingRules.push(created);
+          return created;
+        }
+      } catch (err) {
+        console.warn('[dataStore] Supabase createPricingRule fallback:', err);
+      }
+    }
+    const newRule: Rule = {
+      ...rule,
+      id: `rule-${Date.now()}`,
+    };
+    memStore.pricingRules.push(newRule);
+    return newRule;
+  },
+
+  // COUPONS
+  async getCoupons(): Promise<CouponData[]> {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const coupons = await SupabaseDatabase.getCoupons();
+        if (coupons && coupons.length > 0) return coupons;
+      } catch (err) {
+        console.warn('[dataStore] Supabase getCoupons fallback:', err);
+      }
+    }
+    return memStore.coupons;
+  },
+
+  async createCoupon(coupon: Omit<CouponData, 'id'>): Promise<CouponData> {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const created = await SupabaseDatabase.createCoupon(coupon);
+        if (created) {
+          memStore.coupons.push(created);
+          return created;
+        }
+      } catch (err) {
+        console.warn('[dataStore] Supabase createCoupon fallback:', err);
+      }
+    }
+    const newCoupon: CouponData = {
+      ...coupon,
+      id: `cpn-${Date.now()}`,
+    };
+    memStore.coupons.push(newCoupon);
+    return newCoupon;
   },
 };

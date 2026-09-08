@@ -115,7 +115,7 @@ export class CancellationEngine {
   // 2. COMPLETE SERVER-SIDE CANCELLATION FLOW
   static async processCancellation(params: ProcessCancellationParams): Promise<ProcessCancellationResult> {
     // A. Verify booking existence
-    const booking = dataStore.getBookingById(params.bookingId);
+    const booking = await dataStore.getBookingById(params.bookingId);
     if (!booking) {
       return {
         success: false,
@@ -185,7 +185,7 @@ export class CancellationEngine {
     booking.refundStatus = refundStatus;
     booking.updatedAt = new Date().toISOString();
 
-    dataStore.updateBooking(booking.id, {
+    await dataStore.updateBooking(booking.id, {
       status: 'CANCELLED',
       cancellationReason: booking.cancellationReason,
       refundAmount: booking.refundAmount,

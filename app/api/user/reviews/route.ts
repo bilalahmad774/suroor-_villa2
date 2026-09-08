@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { dataStore } from '@/src/lib/dataStore';
 
 export async function GET() {
-  const reviews = dataStore.listReviews();
+  const reviews = await dataStore.listReviews();
   return NextResponse.json({ reviews });
 }
 
@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Name, rating, and comment are required.' }, { status: 400 });
     }
 
-    const newReview = dataStore.addReview({
+    const newReview = await dataStore.addReview({
       guestName: guestName.trim(),
       rating: Number(rating),
       comment: comment.trim(),

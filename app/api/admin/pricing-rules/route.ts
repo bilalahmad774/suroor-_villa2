@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { dataStore, memStore } from '@/lib/dataStore';
+import { dataStore } from '@/lib/dataStore';
 import { getSessionUser } from '@/lib/auth';
 
 export async function GET(req: NextRequest) {
@@ -9,7 +9,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Forbidden. Admin access required.' }, { status: 403 });
     }
 
-    return NextResponse.json({ success: true, rules: memStore.pricingRules });
+    const rules = await dataStore.getPricingRules();
+    return NextResponse.json({ success: true, rules });
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'Error fetching pricing rules' }, { status: 500 });
   }
@@ -23,8 +24,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const newRule = {
-      id: `rule-${Date.now()}`,
+    const newRule = await dataStore.createPricingRule({
       villaId: body.villaId || 'villa-suroor-main',
       name: body.name,
       ruleType: body.ruleType || 'SEASONAL',
@@ -38,9 +38,7 @@ export async function POST(req: NextRequest) {
       extraGuestFee: Number(body.extraGuestFee || 2500),
       isWeekendRule: Boolean(body.isWeekendRule),
       isActive: true,
-    };
-
-    memStore.pricingRules.push(newRule);
+    });
 
     dataStore.addAuditLog({
       userId: user.id,

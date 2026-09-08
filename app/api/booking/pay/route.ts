@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'bookingId is required.' }, { status: 400 });
     }
 
-    const booking = dataStore.getBookingById(bookingId);
+    const booking = await dataStore.getBookingById(bookingId);
     if (!booking) {
       return NextResponse.json({ error: 'Booking record not found.' }, { status: 404 });
     }

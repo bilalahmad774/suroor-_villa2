@@ -10,8 +10,8 @@ export async function GET(req: NextRequest) {
     }
 
     const profile =
-      dataStore.getUserProfile(session.id) ||
-      dataStore.getUserProfile(session.email);
+      (await dataStore.getUserProfile(session.id)) ||
+      (await dataStore.getUserProfile(session.email));
 
     if (!profile) {
       return NextResponse.json({ error: 'User profile not found' }, { status: 404 });
@@ -34,14 +34,14 @@ export async function PUT(req: NextRequest) {
 
     const body = await req.json();
     const updatedProfile =
-      dataStore.updateUserProfile(session.id, {
+      (await dataStore.updateUserProfile(session.id, {
         fullName: body.fullName,
         phone: body.phone,
-      }) ||
-      dataStore.updateUserProfile(session.email, {
+      })) ||
+      (await dataStore.updateUserProfile(session.email, {
         fullName: body.fullName,
         phone: body.phone,
-      });
+      }));
 
     return NextResponse.json({ success: true, profile: updatedProfile });
   } catch (err: any) {
