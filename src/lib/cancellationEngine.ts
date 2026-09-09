@@ -178,7 +178,15 @@ export class CancellationEngine {
       refundStatus = refundGatewayResult.success ? 'PROCESSED' : 'FAILED';
     }
 
-    // E. Update booking in dataStore
+    // E. Update booking in dataStore and persist cancellation record
+    await dataStore.cancelBooking(
+      booking.id,
+      params.reason || calcResult.explanation,
+      calcResult.explanation,
+      params.isAdmin ? 'ADMIN' : 'CUSTOMER',
+      calcResult.refundAmount
+    );
+
     booking.status = 'CANCELLED';
     booking.cancellationReason = params.reason || calcResult.explanation;
     booking.refundAmount = calcResult.refundAmount;

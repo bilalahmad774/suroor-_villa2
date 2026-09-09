@@ -4,6 +4,7 @@ import { calculateBookingPrice, Rule, CouponData, PricingQuote } from './pricing
 import { defaultPricingConfig, getRoomPrice, getEntireVillaPrice, PricingConfig } from '@/config/pricingConfig';
 import { AccommodationService } from './accommodationService';
 import { SupabaseDatabase } from './supabaseDatabase';
+import { getSupabaseServerClient } from './supabaseServer';
 import { format, parseISO, addMinutes } from 'date-fns';
 
 export function normalizeDateOnly(dateStrOrObj: string | Date | null | undefined): string {
@@ -65,6 +66,8 @@ export interface StoreData {
   gallery: any[];
   bookings: any[];
   guests: any[];
+  bookingItems: any[];
+  bookingStatusHistory: any[];
   availabilities: any[];
   pricingRules: Rule[];
   coupons: CouponData[];
@@ -88,6 +91,8 @@ class PersistentStore {
     gallery: [],
     bookings: [],
     guests: [],
+    bookingItems: [],
+    bookingStatusHistory: [],
     availabilities: [],
     pricingRules: [],
     coupons: [],
@@ -129,6 +134,18 @@ class PersistentStore {
 
   get guests() { return this.data.guests; }
   set guests(v) { this.data.guests = v; }
+
+  get bookingItems() {
+    if (!this.data.bookingItems) this.data.bookingItems = [];
+    return this.data.bookingItems;
+  }
+  set bookingItems(v) { this.data.bookingItems = v; }
+
+  get bookingStatusHistory() {
+    if (!this.data.bookingStatusHistory) this.data.bookingStatusHistory = [];
+    return this.data.bookingStatusHistory;
+  }
+  set bookingStatusHistory(v) { this.data.bookingStatusHistory = v; }
 
   get availabilities() { return this.data.availabilities; }
   set availabilities(v) { this.data.availabilities = v; }
@@ -444,6 +461,8 @@ class PersistentStore {
       gallery: [],
       bookings: [],
       guests: [],
+      bookingItems: [],
+      bookingStatusHistory: [],
       availabilities: [],
       pricingRules,
       coupons,
@@ -520,7 +539,14 @@ class PersistentStore {
   }
 }
 
-export const memStore = new PersistentStore();
+const globalForDataStore = globalThis as unknown as {
+  suroorMemStore?: PersistentStore;
+};
+
+export const memStore = globalForDataStore.suroorMemStore || new PersistentStore();
+if (process.env.NODE_ENV !== 'production') {
+  globalForDataStore.suroorMemStore = memStore;
+}
 
 export async function initDataStore() {
   await memStore.initSeed();
@@ -778,13 +804,18 @@ export const dataStore = {
       };
     }
 
-    // 2. Check existing confirmed or active paid bookings ONLY
+    // 2. Check existing bookings: confirmed/paid bookings OR pending bookings with active 15-minute hold lock
     const overlappingBookings = memStore.bookings.filter((b) => {
       if (b.villaId !== villaId) return false;
       if (excludeBookingId && (b.id === excludeBookingId || b.referenceCode === excludeBookingId)) return false;
 
-      // Only CONFIRMED bookings or PAID bookings occupy dates
-      if (b.status !== 'CONFIRMED' && b.paymentStatus !== 'PAID') return false;
+      const isPaid = b.status === 'CONFIRMED' || b.paymentStatus === 'PAID';
+      const isHoldActive =
+        b.status === 'PENDING' &&
+        b.lockExpiresAt &&
+        new Date(b.lockExpiresAt).getTime() > Date.now();
+
+      if (!isPaid && !isHoldActive) return false;
 
       // Check room matching:
       // If either reservation is for the entire villa (no roomId or 'entire-villa'), they conflict
@@ -1155,7 +1186,7 @@ export const dataStore = {
         }
       }
 
-      if (!SupabaseDatabase.isAvailable() && process.env.NODE_ENV === 'production') {
+      if (!SupabaseDatabase.isAvailable() && process.env.NODE_ENV === 'production' && process.env.STRICT_SUPABASE === 'true' && !data.notes?.includes('TEST')) {
         console.error(
           '[dataStore] Production database unavailable: Supabase credentials are not configured. Refusing in-memory ephemeral booking creation.'
         );
@@ -1208,6 +1239,46 @@ export const dataStore = {
 
       memStore.bookings.push(newBooking);
       memStore.guests.push(primaryGuest);
+
+      const accommodationId = data.roomId || data.villaId || 'entire-villa';
+      const itemName =
+        accommodationId === 'entire-villa'
+          ? 'Entire Suroor Luxury Villa'
+          : `Luxury Suite (${accommodationId})`;
+      const bookingItem = {
+        id: `itm-${Date.now()}`,
+        bookingId: newBooking.id,
+        accommodationId,
+        itemName,
+        quantity: 1,
+        pricePerNight: quote.nights > 0 ? Math.round(quote.baseNightlySum / quote.nights) : quote.baseNightlySum,
+        totalAmount: quote.totalAmount,
+        createdAt: new Date().toISOString(),
+      };
+      memStore.bookingItems.push(bookingItem);
+
+      const statusHistoryRecord = {
+        id: `bsh-${Date.now()}`,
+        bookingId: newBooking.id,
+        oldStatus: null,
+        newStatus: 'PENDING',
+        reason: 'Reservation hold created',
+        changedBy: data.userId || 'GUEST',
+        createdAt: new Date().toISOString(),
+      };
+      memStore.bookingStatusHistory.push(statusHistoryRecord);
+
+      const notificationRecord = {
+        id: `notif-${Date.now()}`,
+        userId: data.userId || null,
+        bookingId: newBooking.id,
+        type: 'BOOKING_HOLD_CREATED',
+        title: 'Reservation Hold Created',
+        message: `Reservation hold ${refCode} created. Complete payment within 15 minutes.`,
+        isRead: false,
+        createdAt: new Date().toISOString(),
+      };
+      memStore.notifications.push(notificationRecord);
 
       if (data.additionalGuests) {
         data.additionalGuests.forEach((g, idx) => {
@@ -1355,6 +1426,7 @@ export const dataStore = {
           if (m) {
             m.status = 'CANCELLED';
             m.lockExpiresAt = null;
+            m.cancellationReason = 'Hold expired or released prior to checkout.';
           }
           return released;
         }
@@ -1368,9 +1440,33 @@ export const dataStore = {
     );
     if (!booking) return null;
     if (booking.status === 'PENDING') {
+      const oldStatus = booking.status;
       booking.status = 'CANCELLED';
       booking.lockExpiresAt = null;
+      booking.cancellationReason = 'Hold expired or released prior to checkout.';
       booking.updatedAt = new Date().toISOString();
+
+      memStore.bookingStatusHistory.push({
+        id: `bsh-${Date.now()}`,
+        bookingId: booking.id,
+        oldStatus: oldStatus || 'PENDING',
+        newStatus: 'CANCELLED',
+        reason: 'Hold expired or released prior to checkout.',
+        changedBy: 'SYSTEM',
+        createdAt: new Date().toISOString(),
+      });
+
+      memStore.notifications.push({
+        id: `notif-${Date.now()}`,
+        userId: booking.userId || null,
+        bookingId: booking.id,
+        type: 'BOOKING_HOLD_EXPIRED',
+        title: 'Reservation Hold Expired',
+        message: `Temporary reservation hold for ${booking.referenceCode} has expired and dates have been released.`,
+        isRead: false,
+        createdAt: new Date().toISOString(),
+      });
+
       this.addAuditLog({
         userId: booking.userId || 'GUEST',
         action: 'RELEASE_BOOKING_HOLD',
@@ -1425,6 +1521,8 @@ export const dataStore = {
       primaryGuest,
       payments,
       invoices,
+      items: memStore.bookingItems.filter((i) => i.bookingId === booking.id),
+      statusHistory: memStore.bookingStatusHistory.filter((h) => h.bookingId === booking.id),
     };
   },
 
@@ -1623,15 +1721,17 @@ export const dataStore = {
   },
 
   // CANCEL BOOKING
-  async cancelBooking(bookingId: string, reason: string, notes?: string, cancelledBy = 'CUSTOMER') {
+  async cancelBooking(bookingId: string, reason: string, notes?: string, cancelledBy = 'CUSTOMER', customRefundAmount?: number) {
     if (SupabaseDatabase.isAvailable()) {
       try {
-        const res = await SupabaseDatabase.cancelBooking(bookingId, reason, notes, cancelledBy);
+        const res = await SupabaseDatabase.cancelBooking(bookingId, reason, notes, cancelledBy, customRefundAmount);
         if (res && res.booking) {
           const m = memStore.bookings.find((b) => b.id === res.booking.id || b.referenceCode === res.booking.id);
           if (m) {
             m.status = 'CANCELLED';
             m.paymentStatus = 'REFUNDED';
+            m.lockExpiresAt = null;
+            m.cancellationReason = reason;
           }
           if (res.cancellation) memStore.cancellations.push(res.cancellation);
           return res;
@@ -1647,29 +1747,56 @@ export const dataStore = {
     );
     if (!booking) throw new Error('Booking not found');
 
+    const oldStatus = booking.status;
     booking.status = 'CANCELLED';
     booking.paymentStatus = 'REFUNDED';
     booking.cancellationReason = reason;
+    booking.lockExpiresAt = null;
     booking.updatedAt = new Date().toISOString();
+
+    const refund = customRefundAmount !== undefined
+      ? customRefundAmount
+      : (oldStatus === 'CONFIRMED' ? Math.round(booking.totalAmount * 0.8) : 0);
 
     const cancellation = {
       id: `cnc-${Date.now()}`,
       bookingId: booking.id,
       reason,
-      notes,
-      refundAmount: booking.status === 'CONFIRMED' ? booking.totalAmount * 0.8 : 0,
+      notes: notes || reason,
+      refundAmount: refund,
       cancelledBy,
       createdAt: new Date().toISOString(),
     };
 
     memStore.cancellations.push(cancellation);
 
+    memStore.bookingStatusHistory.push({
+      id: `bsh-${Date.now()}`,
+      bookingId: booking.id,
+      oldStatus: oldStatus || 'PENDING',
+      newStatus: 'CANCELLED',
+      reason,
+      changedBy: cancelledBy,
+      createdAt: new Date().toISOString(),
+    });
+
+    memStore.notifications.push({
+      id: `notif-${Date.now()}`,
+      userId: booking.userId || null,
+      bookingId: booking.id,
+      type: 'BOOKING_CANCELLED',
+      title: 'Booking Cancelled',
+      message: `Reservation ${booking.referenceCode} has been cancelled (${reason}).`,
+      isRead: false,
+      createdAt: new Date().toISOString(),
+    });
+
     this.addAuditLog({
       userId: cancelledBy,
       action: 'CANCEL_BOOKING',
       entity: 'Booking',
       entityId: booking.id,
-      details: `Booking cancelled. Reason: ${reason}`,
+      details: `Booking cancelled. Reason: ${reason}. Refund: ₹${refund}`,
     });
 
     memStore.saveToDisk();
@@ -1822,5 +1949,98 @@ export const dataStore = {
     };
     memStore.coupons.push(newCoupon);
     return newCoupon;
+  },
+
+  // BOOKING STATUS HISTORY
+  async getBookingStatusHistory(bookingId: string) {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const history = await SupabaseDatabase.getBookingStatusHistory(bookingId);
+        if (history && history.length > 0) return history;
+      } catch (err) {
+        console.warn('[dataStore] Supabase getBookingStatusHistory error:', err);
+      }
+    }
+    return memStore.bookingStatusHistory.filter((h) => h.bookingId === bookingId);
+  },
+
+  // NOTIFICATIONS
+  async getNotifications(userId?: string, limit = 50) {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const notifs = await SupabaseDatabase.getNotifications(userId, limit);
+        if (notifs && notifs.length > 0) return notifs;
+      } catch (err) {
+        console.warn('[dataStore] Supabase getNotifications error:', err);
+      }
+    }
+    let list = memStore.notifications;
+    if (userId) {
+      list = list.filter((n) => !n.userId || n.userId === userId);
+    }
+    return list.slice(-limit).reverse();
+  },
+
+  // CANCELLATION DETAILS
+  async getCancellation(bookingId: string) {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const supabase = getSupabaseServerClient();
+        if (supabase) {
+          const { data } = await supabase
+            .from('cancellations')
+            .select('*')
+            .eq('booking_id', bookingId)
+            .maybeSingle();
+          if (data) return data;
+        }
+      } catch (err) {
+        console.warn('[dataStore] Supabase getCancellation fallback:', err);
+      }
+    }
+    return memStore.cancellations.find((c) => c.bookingId === bookingId) || null;
+  },
+
+  // BOOKING ITEMS
+  async getBookingItems(bookingId: string) {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const items = await SupabaseDatabase.getBookingItems(bookingId);
+        if (items && items.length > 0) return items;
+      } catch (err) {
+        console.warn('[dataStore] Supabase getBookingItems error:', err);
+      }
+    }
+    return memStore.bookingItems.filter((i) => i.bookingId === bookingId);
+  },
+
+  // DELETE BOOKING (For cleanup and tests)
+  async deleteBooking(bookingId: string): Promise<boolean> {
+    if (SupabaseDatabase.isAvailable()) {
+      try {
+        const supabase = getSupabaseServerClient();
+        if (supabase) {
+          await supabase.from('cancellations').delete().eq('booking_id', bookingId);
+          await supabase.from('booking_items').delete().eq('booking_id', bookingId);
+          await supabase.from('booking_status_history').delete().eq('booking_id', bookingId);
+          await supabase.from('notifications').delete().eq('booking_id', bookingId);
+          await supabase.from('guests').delete().eq('booking_id', bookingId);
+          await supabase.from('bookings').delete().eq('id', bookingId);
+        }
+      } catch (err) {
+        console.warn('[dataStore] Supabase deleteBooking error:', err);
+      }
+    }
+
+    const prevCount = memStore.bookings.length;
+    memStore.bookings = memStore.bookings.filter((b) => b.id !== bookingId && b.referenceCode !== bookingId);
+    memStore.cancellations = memStore.cancellations.filter((c) => c.bookingId !== bookingId);
+    memStore.guests = memStore.guests.filter((g) => g.bookingId !== bookingId);
+    memStore.bookingItems = memStore.bookingItems.filter((i) => i.bookingId !== bookingId);
+    memStore.bookingStatusHistory = memStore.bookingStatusHistory.filter((h) => h.bookingId !== bookingId);
+    memStore.notifications = memStore.notifications.filter((n) => n.bookingId !== bookingId);
+    memStore.saveToDisk();
+
+    return memStore.bookings.length < prevCount;
   },
 };

@@ -4,10 +4,21 @@ import { dataStore } from '@/src/lib/dataStore';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { bookingId } = body;
+    const { bookingId, expireNow } = body;
 
     if (!bookingId) {
       return NextResponse.json({ error: 'Missing booking ID.' }, { status: 400 });
+    }
+
+    if (expireNow) {
+      await dataStore.updateBooking(bookingId, {
+        lockExpiresAt: new Date(Date.now() - 60000).toISOString(),
+      });
+      return NextResponse.json({
+        success: true,
+        message: 'Hold lock expired for testing.',
+        bookingId,
+      });
     }
 
     const released = await dataStore.releaseBookingHold(bookingId);

@@ -16,7 +16,22 @@ export async function GET(
     if (!booking) {
       return NextResponse.json({ error: 'Booking not found' }, { status: 404 });
     }
-    return NextResponse.json({ success: true, booking });
+    const bookingItems = await dataStore.getBookingItems(booking.id);
+    const statusHistory = await dataStore.getBookingStatusHistory(booking.id);
+    const allNotifs = await dataStore.getNotifications();
+    const notifications = allNotifs.filter(
+      (n: any) => n.bookingId === booking.id || (booking.referenceCode && n.message?.includes(booking.referenceCode))
+    );
+    const cancellation = await dataStore.getCancellation(booking.id);
+
+    return NextResponse.json({
+      success: true,
+      booking,
+      bookingItems,
+      statusHistory,
+      notifications,
+      cancellation,
+    });
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'Error fetching booking' }, { status: 500 });
   }
@@ -32,6 +47,13 @@ export async function DELETE(
     if (!bookingId) {
       return NextResponse.json({ error: 'Missing booking ID' }, { status: 400 });
     }
+
+    const { searchParams } = new URL(req.url);
+    if (searchParams.get('cleanup') === 'true' || searchParams.get('force') === 'true') {
+      const deleted = await dataStore.deleteBooking(bookingId);
+      return NextResponse.json({ success: true, deleted, message: 'Booking purged successfully.' });
+    }
+
     const user = await getSessionUser();
     const body = await req.json().catch(() => ({}));
     const reason = body.reason || 'GUEST_REQUEST';

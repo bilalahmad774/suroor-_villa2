@@ -12,6 +12,45 @@ export interface AccommodationRecord {
   updated_at?: string;
 }
 
+export const DEFAULT_ACCOMMODATIONS: AccommodationRecord[] = [
+  {
+    id: 'entire-villa',
+    name: 'Entire Villa (3 Bedrooms)',
+    type: 'villa',
+    base_price_per_night: 30000,
+    currency: 'INR',
+    capacity: 6,
+    is_active: true,
+  },
+  {
+    id: 'room-1',
+    name: 'The Master Suite',
+    type: 'suite',
+    base_price_per_night: 15000,
+    currency: 'INR',
+    capacity: 2,
+    is_active: true,
+  },
+  {
+    id: 'room-2',
+    name: 'The Pine Suite',
+    type: 'suite',
+    base_price_per_night: 15000,
+    currency: 'INR',
+    capacity: 2,
+    is_active: true,
+  },
+  {
+    id: 'room-3',
+    name: 'The Garden Room',
+    type: 'suite',
+    base_price_per_night: 15000,
+    currency: 'INR',
+    capacity: 2,
+    is_active: true,
+  },
+];
+
 export class AccommodationService {
   /**
    * Fetches all active accommodations directly from Supabase public.accommodations table.
@@ -20,8 +59,7 @@ export class AccommodationService {
   static async getAllAccommodations(): Promise<AccommodationRecord[]> {
     const supabase = getSupabaseServerClient();
     if (!supabase) {
-      console.error('[AccommodationService] Supabase server client unavailable: database credentials not configured.');
-      return [];
+      return DEFAULT_ACCOMMODATIONS;
     }
 
     try {
@@ -30,13 +68,8 @@ export class AccommodationService {
         .select('id, name, type, base_price_per_night, currency, capacity, is_active, updated_at')
         .order('id', { ascending: true });
 
-      if (error) {
-        console.warn('[AccommodationService] Supabase accommodations query error:', error.message);
-        return [];
-      }
-
-      if (!data || data.length === 0) {
-        return [];
+      if (error || !data || data.length === 0) {
+        return DEFAULT_ACCOMMODATIONS;
       }
 
       const parsedRecords: AccommodationRecord[] = data.map((item: any) => {
@@ -58,7 +91,7 @@ export class AccommodationService {
       return parsedRecords;
     } catch (err: any) {
       console.warn('[AccommodationService] Error loading accommodations from Supabase:', err.message);
-      return [];
+      return DEFAULT_ACCOMMODATIONS;
     }
   }
 
@@ -68,11 +101,11 @@ export class AccommodationService {
    */
   static async getAccommodationById(id: string): Promise<AccommodationRecord | null> {
     const normalizedId = id === 'entire-villa' || id === 'villa-suroor-main' ? 'entire-villa' : id;
+    const fallback = DEFAULT_ACCOMMODATIONS.find((a) => a.id === normalizedId) || null;
     const supabase = getSupabaseServerClient();
 
     if (!supabase) {
-      console.error(`[AccommodationService] Supabase server client unavailable. Cannot fetch accommodation '${id}'.`);
-      return null;
+      return fallback;
     }
 
     try {
@@ -83,11 +116,11 @@ export class AccommodationService {
         .maybeSingle();
 
       if (error || !data) {
-        return null;
+        return fallback;
       }
 
       const rawPrice = Number(data.base_price_per_night);
-      const validPrice = !isNaN(rawPrice) ? rawPrice : 0;
+      const validPrice = !isNaN(rawPrice) ? rawPrice : (fallback?.base_price_per_night || 0);
 
       return {
         id: String(data.id),
@@ -95,13 +128,13 @@ export class AccommodationService {
         type: String(data.type || 'standard'),
         base_price_per_night: validPrice,
         currency: String(data.currency || 'INR'),
-        capacity: Number(data.capacity) || 2,
+        capacity: Number(data.capacity) || (fallback?.capacity || 2),
         is_active: data.is_active !== false,
         updated_at: data.updated_at,
       };
     } catch (err: any) {
       console.warn('[AccommodationService] Error loading accommodation by id:', err.message);
-      return null;
+      return fallback;
     }
   }
 

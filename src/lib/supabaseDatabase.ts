@@ -1,4 +1,5 @@
 import { getSupabaseServerClient } from './supabaseServer';
+import { AccommodationService } from './accommodationService';
 import type {
   User,
   Villa,
@@ -14,10 +15,97 @@ import type {
   ContactMessage,
 } from './dataStore';
 
+export interface BookingItem {
+  id: string;
+  bookingId: string;
+  accommodationId: string;
+  name: string;
+  quantity: number;
+  pricePerNight: number;
+  totalAmount: number;
+  createdAt?: string;
+}
+
+export interface BookingStatusHistory {
+  id: string;
+  bookingId: string;
+  oldStatus?: string | null;
+  newStatus: string;
+  reason?: string | null;
+  changedBy?: string | null;
+  createdAt: string;
+}
+
+export interface NotificationItem {
+  id: string;
+  userId?: string | null;
+  bookingId?: string | null;
+  type: string;
+  title: string;
+  message: string;
+  isRead: boolean;
+  createdAt: string;
+}
+
+export function mapBookingItemFromDb(row: any): BookingItem {
+  return {
+    id: row.id,
+    bookingId: row.booking_id,
+    accommodationId: row.accommodation_id || 'entire-villa',
+    name: row.item_name || row.name || 'Suroor Luxury Stay',
+    quantity: Number(row.quantity || 1),
+    pricePerNight: Number(row.price_per_night || 0),
+    totalAmount: Number(row.total_amount || 0),
+    createdAt: row.created_at,
+  };
+}
+
 /**
  * Helper to map snake_case database row to camelCase Booking object
  */
-export function mapBookingFromDb(row: any, guests: any[] = [], payments: any[] = [], invoices: any[] = []): Booking {
+export function mapBookingFromDb(
+  row: any,
+  guests: any[] = [],
+  payments: any[] = [],
+  invoices: any[] = [],
+  items: any[] = []
+): Booking {
+  const primaryName =
+    guests[0]?.fullName ||
+    guests[0]?.full_name ||
+    row.customer_name ||
+    row.guest_name ||
+    undefined;
+  const primaryEmail =
+    guests[0]?.email ||
+    row.customer_email ||
+    row.guest_email ||
+    undefined;
+  const primaryPhone =
+    guests[0]?.phone ||
+    row.customer_phone ||
+    row.guest_phone ||
+    undefined;
+
+  const mappedGuests =
+    guests.length > 0
+      ? guests.map(mapGuestFromDb)
+      : primaryName || primaryEmail
+      ? [
+          {
+            id: `gst-${row.id}`,
+            bookingId: row.id,
+            fullName: primaryName || 'Primary Guest',
+            email: primaryEmail || '',
+            phone: primaryPhone || '',
+            idType: row.guest_id_type || row.id_type || undefined,
+            idNumber: row.guest_id_number || row.id_number || undefined,
+            isPrimary: true,
+            createdAt: row.created_at,
+          },
+        ]
+      : [];
+
   return {
     id: row.id,
     referenceCode: row.reference_code,
@@ -52,12 +140,13 @@ export function mapBookingFromDb(row: any, guests: any[] = [], payments: any[] =
     couponId: row.coupon_id || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    guests: guests.map(mapGuestFromDb),
+    guests: mappedGuests,
+    items: items.map(mapBookingItemFromDb),
     payments: payments.map(mapPaymentFromDb),
     invoices: invoices.map(mapInvoiceFromDb),
-    customerName: guests[0]?.fullName || guests[0]?.full_name || undefined,
-    customerEmail: guests[0]?.email || undefined,
-    customerPhone: guests[0]?.phone || undefined,
+    customerName: primaryName,
+    customerEmail: primaryEmail,
+    customerPhone: primaryPhone,
   };
 }
 
@@ -187,18 +276,32 @@ export class SupabaseDatabase {
   }
 
   // ==========================================================================
-  // USERS & AUTH
+  // USERS & AUTH (profiles table with users fallback)
   // ==========================================================================
 
   static async findUserByEmail(email: string): Promise<User | null> {
     const supabase = getSupabaseServerClient();
     if (!supabase) return null;
 
+    const cleanEmail = email.trim().toLowerCase();
+
     try {
+      // Primary: profiles table
+      const { data: profData, error: profErr } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('email', cleanEmail)
+        .maybeSingle();
+
+      if (!profErr && profData) {
+        return mapUserFromDb(profData);
+      }
+
+      // Fallback: users table
       const { data, error } = await supabase
         .from('users')
         .select('*')
-        .eq('email', email.trim().toLowerCase())
+        .eq('email', cleanEmail)
         .maybeSingle();
 
       if (error || !data) return null;
@@ -214,6 +317,18 @@ export class SupabaseDatabase {
     if (!supabase) return null;
 
     try {
+      // Primary: profiles table
+      const { data: profData, error: profErr } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (!profErr && profData) {
+        return mapUserFromDb(profData);
+      }
+
+      // Fallback: users table
       const { data, error } = await supabase
         .from('users')
         .select('*')
@@ -257,28 +372,52 @@ export class SupabaseDatabase {
       return mapUserFromDb(insertRow);
     }
 
-    const { data, error } = await supabase
+    // 1. Try profiles table
+    const { data: profileData, error: profErr } = await supabase
+      .from('profiles')
+      .insert(insertRow)
+      .select()
+      .maybeSingle();
+
+    if (!profErr && profileData) {
+      return mapUserFromDb(profileData);
+    }
+
+    // 2. Fallback to users table if profiles isn't available
+    const { data: userDataRow, error: userErr } = await supabase
       .from('users')
       .insert(insertRow)
       .select()
       .single();
 
-    if (error) {
-      throw new Error(`Failed to create user in Supabase: ${error.message}`);
+    if (userErr) {
+      throw new Error(`Failed to create user/profile in Supabase: ${profErr?.message || userErr.message}`);
     }
 
-    return mapUserFromDb(data);
+    return mapUserFromDb(userDataRow);
   }
 
   static async updateUserPassword(userId: string, newPasswordHash: string): Promise<boolean> {
     const supabase = getSupabaseServerClient();
     if (!supabase) return false;
 
+    const now = new Date().toISOString();
+
+    const { error: profErr } = await supabase
+      .from('profiles')
+      .update({
+        password_hash: newPasswordHash,
+        updated_at: now,
+      })
+      .eq('id', userId);
+
+    if (!profErr) return true;
+
     const { error } = await supabase
       .from('users')
       .update({
         password_hash: newPasswordHash,
-        updated_at: new Date().toISOString(),
+        updated_at: now,
       })
       .eq('id', userId);
 
@@ -290,8 +429,27 @@ export class SupabaseDatabase {
     if (!supabase) return null;
 
     const isEmail = userIdOrEmail.includes('@');
-    const query = supabase.from('users').select('id, email, full_name, phone, role, is_verified, created_at');
 
+    // 1. Try profiles table
+    const profQuery = supabase.from('profiles').select('id, email, full_name, phone, role, is_verified, created_at');
+    const { data: profData, error: profErr } = isEmail
+      ? await profQuery.eq('email', userIdOrEmail.toLowerCase()).maybeSingle()
+      : await profQuery.eq('id', userIdOrEmail).maybeSingle();
+
+    if (!profErr && profData) {
+      return {
+        id: profData.id,
+        email: profData.email,
+        fullName: profData.full_name,
+        phone: profData.phone || '',
+        role: profData.role,
+        isVerified: Boolean(profData.is_verified),
+        createdAt: profData.created_at,
+      };
+    }
+
+    // 2. Fallback to users table
+    const query = supabase.from('users').select('id, email, full_name, phone, role, is_verified, created_at');
     const { data, error } = isEmail
       ? await query.eq('email', userIdOrEmail.toLowerCase()).maybeSingle()
       : await query.eq('id', userIdOrEmail).maybeSingle();
@@ -317,8 +475,26 @@ export class SupabaseDatabase {
     if (data.fullName !== undefined) updateData.full_name = data.fullName;
     if (data.phone !== undefined) updateData.phone = data.phone;
 
-    const query = supabase.from('users').update(updateData).select('id, email, full_name, phone, role, is_verified, created_at');
+    // 1. Try profiles table
+    const profQuery = supabase.from('profiles').update(updateData).select('id, email, full_name, phone, role, is_verified, created_at');
+    const { data: updatedProf, error: profErr } = isEmail
+      ? await profQuery.eq('email', userIdOrEmail.toLowerCase()).maybeSingle()
+      : await profQuery.eq('id', userIdOrEmail).maybeSingle();
 
+    if (!profErr && updatedProf) {
+      return {
+        id: updatedProf.id,
+        email: updatedProf.email,
+        fullName: updatedProf.full_name,
+        phone: updatedProf.phone || '',
+        role: updatedProf.role,
+        isVerified: Boolean(updatedProf.is_verified),
+        createdAt: updatedProf.created_at,
+      };
+    }
+
+    // 2. Fallback to users table
+    const query = supabase.from('users').update(updateData).select('id, email, full_name, phone, role, is_verified, created_at');
     const { data: updated, error } = isEmail
       ? await query.eq('email', userIdOrEmail.toLowerCase()).maybeSingle()
       : await query.eq('id', userIdOrEmail).maybeSingle();
@@ -404,11 +580,8 @@ export class SupabaseDatabase {
     const supabase = getSupabaseServerClient();
     if (!supabase) return { success: false, error: 'Database connection unavailable' };
 
-    // Update password
-    await supabase
-      .from('users')
-      .update({ password_hash: newPasswordHash, updated_at: new Date().toISOString() })
-      .eq('id', verification.record.userId);
+    // Update password in profiles / users
+    await this.updateUserPassword(verification.record.userId, newPasswordHash);
 
     // Mark token as used
     await supabase
@@ -427,63 +600,128 @@ export class SupabaseDatabase {
     const supabase = getSupabaseServerClient();
     if (!supabase) return null;
 
-    const { data, error } = await supabase
-      .from('villas')
-      .select('*')
-      .or(`id.eq.${idOrSlug},slug.eq.${idOrSlug}`)
-      .maybeSingle();
+    try {
+      const { data, error } = await supabase
+        .from('villas')
+        .select('*')
+        .or(`id.eq.${idOrSlug},slug.eq.${idOrSlug}`)
+        .maybeSingle();
 
-    if (error || !data) return null;
+      if (!error && data) {
+        return {
+          id: data.id,
+          name: data.name,
+          slug: data.slug,
+          description: data.description,
+          tagline: data.tagline,
+          maxGuests: Number(data.max_guests),
+          bedroomsCount: Number(data.bedrooms_count),
+          bathroomsCount: Number(data.bathrooms_count),
+          basePrice: Number(data.base_price),
+          cleaningFee: Number(data.cleaning_fee),
+          serviceFee: Number(data.service_fee),
+          taxRate: Number(data.tax_rate),
+          address: data.address,
+          city: data.city,
+          state: data.state,
+          country: data.country,
+          createdAt: data.created_at,
+          updatedAt: data.updated_at,
+        };
+      }
+    } catch {
+      // Fallback
+    }
 
-    return {
-      id: data.id,
-      name: data.name,
-      slug: data.slug,
-      description: data.description,
-      tagline: data.tagline,
-      maxGuests: Number(data.max_guests),
-      bedroomsCount: Number(data.bedrooms_count),
-      bathroomsCount: Number(data.bathrooms_count),
-      basePrice: Number(data.base_price),
-      cleaningFee: Number(data.cleaning_fee),
-      serviceFee: Number(data.service_fee),
-      taxRate: Number(data.tax_rate),
-      address: data.address,
-      city: data.city,
-      state: data.state,
-      country: data.country,
-      createdAt: data.created_at,
-      updatedAt: data.updated_at,
-    };
+    // Fallback: Read from existing public.accommodations table
+    try {
+      const acc = await AccommodationService.getAccommodationById('entire-villa');
+      if (acc) {
+        return {
+          id: 'villa-suroor-main',
+          name: acc.name,
+          slug: 'villa-suroor-main',
+          description: 'Private 3-bedroom luxury mountain sanctuary in Kashmir.',
+          tagline: 'Luxury Heritage Haven in the Hills',
+          maxGuests: acc.capacity || 10,
+          bedroomsCount: 3,
+          bathroomsCount: 3,
+          basePrice: acc.base_price_per_night,
+          cleaningFee: 0,
+          serviceFee: 0,
+          taxRate: 0,
+          address: 'Pine Valley Road',
+          city: 'Srinagar / Kashmir',
+          state: 'Jammu & Kashmir',
+          country: 'India',
+          createdAt: new Date().toISOString(),
+          updatedAt: acc.updated_at || new Date().toISOString(),
+        };
+      }
+    } catch {
+      // Ignore
+    }
+
+    return null;
   }
 
   static async getRooms(villaId = 'villa-suroor-main'): Promise<Room[]> {
     const supabase = getSupabaseServerClient();
     if (!supabase) return [];
 
-    const { data, error } = await supabase
-      .from('rooms')
-      .select('*')
-      .eq('villa_id', villaId)
-      .eq('is_available', true)
-      .order('id', { ascending: true });
+    try {
+      const { data, error } = await supabase
+        .from('rooms')
+        .select('*')
+        .eq('villa_id', villaId)
+        .eq('is_available', true)
+        .order('id', { ascending: true });
 
-    if (error || !data) return [];
+      if (!error && data && data.length > 0) {
+        return data.map((r: any) => ({
+          id: r.id,
+          villaId: r.villa_id,
+          name: r.name,
+          type: r.type,
+          description: r.description,
+          capacity: Number(r.capacity),
+          bedType: r.bed_type,
+          pricePerNight: Number(r.price_per_night),
+          imageUrl: r.image_url,
+          isAvailable: Boolean(r.is_available),
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+        }));
+      }
+    } catch {
+      // Fallback
+    }
 
-    return data.map((r: any) => ({
-      id: r.id,
-      villaId: r.villa_id,
-      name: r.name,
-      type: r.type,
-      description: r.description,
-      capacity: Number(r.capacity),
-      bedType: r.bed_type,
-      pricePerNight: Number(r.price_per_night),
-      imageUrl: r.image_url,
-      isAvailable: Boolean(r.is_available),
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-    }));
+    // Fallback: Read rooms from existing public.accommodations table
+    try {
+      const allAccs = await AccommodationService.getAllAccommodations();
+      const roomAccs = allAccs.filter((a) => a.id !== 'entire-villa' && a.is_active);
+      if (roomAccs.length > 0) {
+        return roomAccs.map((r) => ({
+          id: r.id,
+          villaId: 'villa-suroor-main',
+          name: r.name,
+          type: r.type,
+          description: `Luxury suite accommodation (${r.name})`,
+          capacity: r.capacity,
+          bedType: 'King Bed',
+          pricePerNight: r.base_price_per_night,
+          imageUrl: '/images/bedroom1.jpg',
+          isAvailable: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: r.updated_at || new Date().toISOString(),
+        }));
+      }
+    } catch {
+      // Ignore
+    }
+
+    return [];
   }
 
   // ==========================================================================
@@ -506,21 +744,51 @@ export class SupabaseDatabase {
     const targetOut = checkOut.split('T')[0];
 
     try {
-      // 1. Check blocked dates in availabilities table
-      const { data: blockedData, error: blockErr } = await supabase
-        .from('availabilities')
-        .select('date')
-        .eq('villa_id', villaId)
-        .eq('is_blocked', true)
-        .gte('date', targetIn)
-        .lt('date', targetOut);
+      // 1. Check blocked dates in availability_blocks table (supports date ranges or single dates)
+      let foundBlocks = false;
+      const { data: blocksData, error: blockErr } = await supabase
+        .from('availability_blocks')
+        .select('*')
+        .or(`villa_id.eq.${villaId},villa_id.is.null`);
 
-      if (!blockErr && blockedData && blockedData.length > 0) {
-        return {
-          available: false,
-          conflictDates: blockedData.map((d: any) => d.date),
-          reason: 'Selected dates include dates marked unavailable by the estate host.',
-        };
+      if (!blockErr && blocksData && blocksData.length > 0) {
+        foundBlocks = true;
+        for (const block of blocksData) {
+          if (block.is_blocked === false) continue;
+          const bStart = (block.start_date || block.check_in || block.date || '').split('T')[0];
+          const bEnd = (block.end_date || block.check_out || block.date || '').split('T')[0];
+          if (bStart && bEnd) {
+            const isOverlap = bStart === bEnd
+              ? (bStart >= targetIn && bStart < targetOut)
+              : (bStart < targetOut && bEnd > targetIn);
+            if (isOverlap) {
+              return {
+                available: false,
+                conflictDates: [bStart],
+                reason: block.reason || block.notes || 'Selected dates include dates blocked by the estate management.',
+              };
+            }
+          }
+        }
+      }
+
+      // Fallback: Check availabilities table if availability_blocks wasn't available or had error
+      if (!foundBlocks) {
+        const { data: blockedData, error: legacyErr } = await supabase
+          .from('availabilities')
+          .select('date')
+          .eq('villa_id', villaId)
+          .eq('is_blocked', true)
+          .gte('date', targetIn)
+          .lt('date', targetOut);
+
+        if (!legacyErr && blockedData && blockedData.length > 0) {
+          return {
+            available: false,
+            conflictDates: blockedData.map((d: any) => d.date),
+            reason: 'Selected dates include dates marked unavailable by the estate host.',
+          };
+        }
       }
 
       // 2. Query bookings that are either:
@@ -634,16 +902,52 @@ export class SupabaseDatabase {
         }
       }
 
-      const { data: availData } = await supabase
-        .from('availabilities')
-        .select('date, notes, is_blocked')
-        .eq('villa_id', villaId)
-        .eq('is_blocked', true);
+      const blockedDates: Array<{ date: string; reason?: string }> = [];
 
-      const blockedDates = (availData || []).map((a: any) => ({
-        date: a.date,
-        reason: a.notes || 'Management Block',
-      }));
+      // 1. Check availability_blocks table
+      const { data: blocksData } = await supabase
+        .from('availability_blocks')
+        .select('*')
+        .or(`villa_id.eq.${villaId},villa_id.is.null`);
+
+      if (blocksData && blocksData.length > 0) {
+        for (const block of blocksData) {
+          if (block.is_blocked === false) continue;
+          const bStart = (block.start_date || block.check_in || block.date || '').split('T')[0];
+          const bEnd = (block.end_date || block.check_out || block.date || '').split('T')[0];
+          if (bStart && bEnd) {
+            const cur = new Date(bStart);
+            const end = new Date(bEnd);
+            if (bStart === bEnd) {
+              blockedDates.push({ date: bStart, reason: block.reason || block.notes || 'Management Block' });
+            } else {
+              while (cur < end) {
+                blockedDates.push({
+                  date: cur.toISOString().split('T')[0],
+                  reason: block.reason || block.notes || 'Management Block',
+                });
+                cur.setDate(cur.getDate() + 1);
+              }
+            }
+          }
+        }
+      }
+
+      // 2. Fallback: check availabilities table if no blocks found
+      if (blockedDates.length === 0) {
+        const { data: availData } = await supabase
+          .from('availabilities')
+          .select('date, notes, is_blocked')
+          .eq('villa_id', villaId)
+          .eq('is_blocked', true);
+
+        (availData || []).forEach((a: any) => {
+          blockedDates.push({
+            date: a.date,
+            reason: a.notes || 'Management Block',
+          });
+        });
+      }
 
       return { bookedRanges, blockedDates };
     } catch {
@@ -690,7 +994,7 @@ export class SupabaseDatabase {
     const supabase = getSupabaseServerClient();
     const now = new Date().toISOString();
 
-    const bookingRow = {
+    const bookingRow: any = {
       id: bookingData.bookingId,
       reference_code: bookingData.referenceCode,
       user_id: bookingData.userId || null,
@@ -715,6 +1019,9 @@ export class SupabaseDatabase {
       lock_expires_at: bookingData.lockExpiresAt,
       notes: bookingData.notes || null,
       coupon_id: bookingData.couponId || null,
+      customer_name: bookingData.guest.fullName,
+      customer_email: bookingData.guest.email.toLowerCase(),
+      customer_phone: bookingData.guest.phone,
       created_at: now,
       updated_at: now,
     };
@@ -732,50 +1039,113 @@ export class SupabaseDatabase {
       created_at: now,
     };
 
+    const accommodationId = bookingData.roomId || bookingData.villaId || 'entire-villa';
+    const itemName = accommodationId === 'entire-villa' ? 'Entire Suroor Luxury Villa' : `Luxury Suite (${accommodationId})`;
+    const itemRow = {
+      id: `itm-${Date.now()}`,
+      booking_id: bookingData.bookingId,
+      accommodation_id: accommodationId,
+      item_name: itemName,
+      quantity: 1,
+      price_per_night: bookingData.nights > 0 ? Math.round(bookingData.baseAmount / bookingData.nights) : bookingData.baseAmount,
+      total_amount: bookingData.totalAmount,
+      created_at: now,
+    };
+
     if (!supabase) {
       const mappedGuest = mapGuestFromDb(guestRow);
-      const mappedBooking = mapBookingFromDb(bookingRow, [mappedGuest]);
+      const mappedBooking = mapBookingFromDb(bookingRow, [mappedGuest], [], [], [itemRow]);
       return { booking: mappedBooking, guest: mappedGuest };
     }
 
     // 1. Insert Booking into Supabase
-    const { data: insertedBooking, error: bookErr } = await supabase
+    let insertedBooking: any = null;
+    const { data: bData, error: bookErr } = await supabase
       .from('bookings')
       .insert(bookingRow)
       .select()
       .single();
 
     if (bookErr) {
-      throw new Error(`Failed to insert booking into Supabase: ${bookErr.message}`);
+      // If customer_name/email/phone columns don't exist in legacy bookings table, retry without them
+      if (bookErr.message && (bookErr.message.includes('customer_') || bookErr.message.includes('column'))) {
+        delete bookingRow.customer_name;
+        delete bookingRow.customer_email;
+        delete bookingRow.customer_phone;
+        const { data: retryBData, error: retryErr } = await supabase
+          .from('bookings')
+          .insert(bookingRow)
+          .select()
+          .single();
+        if (retryErr) {
+          throw new Error(`Failed to insert booking into Supabase: ${retryErr.message}`);
+        }
+        insertedBooking = retryBData;
+      } else {
+        throw new Error(`Failed to insert booking into Supabase: ${bookErr.message}`);
+      }
+    } else {
+      insertedBooking = bData;
     }
 
-    // 2. Insert Primary Guest into Supabase
-    const { data: insertedGuest, error: guestErr } = await supabase
-      .from('guests')
-      .insert(guestRow)
-      .select()
-      .single();
-
-    if (guestErr) {
-      console.error('[SupabaseDatabase] Error inserting guest:', guestErr.message);
+    // 2. Insert into booking_items
+    try {
+      await supabase.from('booking_items').insert(itemRow);
+    } catch (itemErr: any) {
+      console.warn('[SupabaseDatabase] Note inserting booking_item:', itemErr.message);
     }
 
-    // 3. Insert Additional Guests if provided
+    // 3. Insert Primary Guest into Supabase
+    let insertedGuest: any = null;
+    try {
+      const { data: gData, error: guestErr } = await supabase
+        .from('guests')
+        .insert(guestRow)
+        .select()
+        .single();
+      if (!guestErr) insertedGuest = gData;
+    } catch (gErr: any) {
+      console.warn('[SupabaseDatabase] Note inserting guest into guests table:', gErr.message);
+    }
+
+    // 4. Insert Additional Guests if provided
     if (bookingData.additionalGuests && bookingData.additionalGuests.length > 0) {
-      const additionalRows = bookingData.additionalGuests.map((ag, idx) => ({
-        id: `gst-${Date.now()}-${idx + 2}`,
-        booking_id: bookingData.bookingId,
-        full_name: ag.fullName,
-        email: (ag.email || bookingData.guest.email).toLowerCase(),
-        phone: ag.phone || bookingData.guest.phone,
-        is_primary: false,
-        created_at: now,
-      }));
-      await supabase.from('guests').insert(additionalRows);
+      try {
+        const additionalRows = bookingData.additionalGuests.map((ag, idx) => ({
+          id: `gst-${Date.now()}-${idx + 2}`,
+          booking_id: bookingData.bookingId,
+          full_name: ag.fullName,
+          email: (ag.email || bookingData.guest.email).toLowerCase(),
+          phone: ag.phone || bookingData.guest.phone,
+          is_primary: false,
+          created_at: now,
+        }));
+        await supabase.from('guests').insert(additionalRows);
+      } catch (agErr: any) {
+        console.warn('[SupabaseDatabase] Note inserting additional guests:', agErr.message);
+      }
     }
+
+    // 5. Record initial status in booking_status_history
+    await this.recordBookingStatusHistory({
+      bookingId: bookingData.bookingId,
+      oldStatus: null,
+      newStatus: 'PENDING',
+      reason: 'Reservation hold created',
+      changedBy: bookingData.userId || 'GUEST',
+    });
+
+    // 6. Record notification in notifications table
+    await this.recordNotification({
+      userId: bookingData.userId || null,
+      bookingId: bookingData.bookingId,
+      type: 'BOOKING_HOLD_CREATED',
+      title: 'Reservation Hold Created',
+      message: `Reservation hold ${bookingData.referenceCode} created. Complete payment within 15 minutes.`,
+    });
 
     const mappedGuest = mapGuestFromDb(insertedGuest || guestRow);
-    const mappedBooking = mapBookingFromDb(insertedBooking, [mappedGuest]);
+    const mappedBooking = mapBookingFromDb(insertedBooking || bookingRow, [mappedGuest], [], [], [itemRow]);
 
     return { booking: mappedBooking, guest: mappedGuest };
   }
@@ -876,18 +1246,37 @@ export class SupabaseDatabase {
     }
 
     // 4. Fetch guests to build comprehensive booking object
-    const { data: guestsData } = await supabase
-      .from('guests')
-      .select('*')
-      .eq('booking_id', params.bookingId);
+    const [guestsRes, itemsRes] = await Promise.all([
+      supabase.from('guests').select('*').eq('booking_id', params.bookingId),
+      supabase.from('booking_items').select('*').eq('booking_id', params.bookingId),
+    ]);
+
+    // 5. Record status transition in booking_status_history
+    await this.recordBookingStatusHistory({
+      bookingId: params.bookingId,
+      oldStatus: 'PENDING',
+      newStatus: 'CONFIRMED',
+      reason: `Payment confirmed via ${params.method} (Txn: ${params.transactionId})`,
+      changedBy: 'SYSTEM_PAYMENT',
+    });
+
+    // 6. Record notification in notifications
+    await this.recordNotification({
+      userId: updatedBooking.user_id || null,
+      bookingId: params.bookingId,
+      type: 'PAYMENT_CONFIRMED',
+      title: 'Booking Confirmed & Paid',
+      message: `Payment of ₹${params.amount.toLocaleString('en-IN')} confirmed for booking ${updatedBooking.reference_code}.`,
+    });
 
     const payment = mapPaymentFromDb(insertedPayment || paymentRow);
     const invoice = mapInvoiceFromDb(insertedInvoice || invoiceRow);
     const booking = mapBookingFromDb(
       updatedBooking,
-      guestsData || [],
+      guestsRes.data || [],
       [payment],
-      [invoice]
+      [invoice],
+      itemsRes.data || []
     );
 
     return { booking, payment, invoice };
@@ -911,6 +1300,15 @@ export class SupabaseDatabase {
       .maybeSingle();
 
     if (error || !data) return null;
+
+    await this.recordBookingStatusHistory({
+      bookingId: data.id,
+      oldStatus: 'PENDING',
+      newStatus: 'CANCELLED',
+      reason: 'Hold expired or released prior to checkout.',
+      changedBy: 'SYSTEM',
+    });
+
     return mapBookingFromDb(data);
   }
 
@@ -927,17 +1325,19 @@ export class SupabaseDatabase {
 
       if (bookErr || !bookingData) return null;
 
-      const [guestsRes, paymentsRes, invoicesRes] = await Promise.all([
+      const [guestsRes, paymentsRes, invoicesRes, itemsRes] = await Promise.all([
         supabase.from('guests').select('*').eq('booking_id', bookingData.id),
         supabase.from('payments').select('*').eq('booking_id', bookingData.id),
         supabase.from('invoices').select('*').eq('booking_id', bookingData.id),
+        supabase.from('booking_items').select('*').eq('booking_id', bookingData.id),
       ]);
 
       return mapBookingFromDb(
         bookingData,
         guestsRes.data || [],
         paymentsRes.data || [],
-        invoicesRes.data || []
+        invoicesRes.data || [],
+        itemsRes.data || []
       );
     } catch (err) {
       console.warn('[SupabaseDatabase] getBookingById error:', err);
@@ -973,10 +1373,11 @@ export class SupabaseDatabase {
 
       const bookingIds = bookingsData.map((b: any) => b.id);
 
-      const [guestsRes, paymentsRes, invoicesRes] = await Promise.all([
+      const [guestsRes, paymentsRes, invoicesRes, itemsRes] = await Promise.all([
         supabase.from('guests').select('*').in('booking_id', bookingIds),
         supabase.from('payments').select('*').in('booking_id', bookingIds),
         supabase.from('invoices').select('*').in('booking_id', bookingIds),
+        supabase.from('booking_items').select('*').in('booking_id', bookingIds),
       ]);
 
       const guestsByBooking = new Map<string, any[]>();
@@ -1000,12 +1401,20 @@ export class SupabaseDatabase {
         invoicesByBooking.set(i.booking_id, arr);
       });
 
+      const itemsByBooking = new Map<string, any[]>();
+      (itemsRes.data || []).forEach((it: any) => {
+        const arr = itemsByBooking.get(it.booking_id) || [];
+        arr.push(it);
+        itemsByBooking.set(it.booking_id, arr);
+      });
+
       let results = bookingsData.map((b: any) =>
         mapBookingFromDb(
           b,
           guestsByBooking.get(b.id) || [],
           paymentsByBooking.get(b.id) || [],
-          invoicesByBooking.get(b.id) || []
+          invoicesByBooking.get(b.id) || [],
+          itemsByBooking.get(b.id) || []
         )
       );
 
@@ -1047,6 +1456,13 @@ export class SupabaseDatabase {
     const supabase = getSupabaseServerClient();
     if (!supabase) return null;
 
+    // Fetch previous status for history tracking
+    const { data: prevBooking } = await supabase
+      .from('bookings')
+      .select('id, status, user_id, reference_code')
+      .or(`id.eq.${bookingId},reference_code.eq.${bookingId}`)
+      .maybeSingle();
+
     const rowUpdates: any = { updated_at: new Date().toISOString() };
     if (updates.status !== undefined) rowUpdates.status = updates.status;
     if (updates.paymentStatus !== undefined) rowUpdates.payment_status = updates.paymentStatus;
@@ -1064,6 +1480,43 @@ export class SupabaseDatabase {
       .maybeSingle();
 
     if (error || !data) return null;
+
+    // Record status transition if status changed
+    if (updates.status !== undefined && prevBooking && prevBooking.status !== updates.status) {
+      await this.recordBookingStatusHistory({
+        bookingId: data.id,
+        oldStatus: prevBooking.status,
+        newStatus: updates.status,
+        reason: updates.cancellationReason || updates.notes || 'Status updated',
+        changedBy: 'ADMIN',
+      });
+
+      if (updates.status === 'CANCELLED') {
+        const cancellationId = `can-${Date.now()}`;
+        try {
+          await supabase.from('cancellations').insert({
+            id: cancellationId,
+            booking_id: data.id,
+            reason: updates.cancellationReason || 'Booking cancelled',
+            notes: updates.notes || null,
+            refund_amount: updates.refundAmount || 0,
+            cancelled_by: 'ADMIN',
+            created_at: new Date().toISOString(),
+          });
+        } catch (cErr: any) {
+          console.warn('[SupabaseDatabase] Note inserting cancellation:', cErr?.message);
+        }
+
+        await this.recordNotification({
+          userId: prevBooking.user_id || null,
+          bookingId: data.id,
+          type: 'BOOKING_CANCELLED',
+          title: 'Booking Cancelled',
+          message: `Booking ${prevBooking.reference_code || data.id} status changed to CANCELLED.`,
+        });
+      }
+    }
+
     return this.getBookingById(data.id);
   }
 
@@ -1079,6 +1532,9 @@ export class SupabaseDatabase {
 
     const now = new Date().toISOString();
 
+    const prevBooking = await this.getBookingById(bookingId);
+    const oldStatus = prevBooking?.status || 'PENDING';
+
     const { data: updatedBooking, error: bookErr } = await supabase
       .from('bookings')
       .update({
@@ -1086,9 +1542,10 @@ export class SupabaseDatabase {
         cancellation_reason: reason,
         refund_amount: refundAmount,
         refund_status: refundAmount > 0 ? 'PENDING' : 'NOT_APPLICABLE',
+        lock_expires_at: null,
         updated_at: now,
       })
-      .eq('id', bookingId)
+      .or(`id.eq.${bookingId},reference_code.eq.${bookingId}`)
       .select()
       .maybeSingle();
 
@@ -1097,7 +1554,7 @@ export class SupabaseDatabase {
     const cancellationId = `can-${Date.now()}`;
     const cancellationRow = {
       id: cancellationId,
-      booking_id: bookingId,
+      booking_id: updatedBooking.id,
       reason,
       notes: notes || null,
       refund_amount: refundAmount,
@@ -1105,13 +1562,188 @@ export class SupabaseDatabase {
       created_at: now,
     };
 
-    await supabase.from('cancellations').insert(cancellationRow);
+    try {
+      await supabase.from('cancellations').insert(cancellationRow);
+    } catch (cErr: any) {
+      console.warn('[SupabaseDatabase] Note inserting cancellation:', cErr?.message);
+    }
 
-    const fullBooking = await this.getBookingById(bookingId);
+    await this.recordBookingStatusHistory({
+      bookingId: updatedBooking.id,
+      oldStatus: oldStatus,
+      newStatus: 'CANCELLED',
+      reason,
+      changedBy: cancelledBy,
+    });
+
+    await this.recordNotification({
+      userId: updatedBooking.user_id || null,
+      bookingId: updatedBooking.id,
+      type: 'BOOKING_CANCELLED',
+      title: 'Booking Cancelled',
+      message: `Reservation ${updatedBooking.reference_code} has been cancelled (${reason}).`,
+    });
+
+    const fullBooking = await this.getBookingById(updatedBooking.id);
     return {
       booking: fullBooking || mapBookingFromDb(updatedBooking),
       cancellation: cancellationRow,
     };
+  }
+
+  // ==========================================================================
+  // BOOKING STATUS HISTORY & NOTIFICATIONS
+  // ==========================================================================
+
+  static async recordBookingStatusHistory(data: {
+    bookingId: string;
+    oldStatus?: string | null;
+    newStatus: string;
+    reason?: string | null;
+    changedBy?: string | null;
+  }): Promise<BookingStatusHistory | null> {
+    const supabase = getSupabaseServerClient();
+    const id = `bsh-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const now = new Date().toISOString();
+
+    const row = {
+      id,
+      booking_id: data.bookingId,
+      old_status: data.oldStatus || null,
+      new_status: data.newStatus,
+      reason: data.reason || null,
+      changed_by: data.changedBy || 'SYSTEM',
+      created_at: now,
+    };
+
+    if (supabase) {
+      try {
+        await supabase.from('booking_status_history').insert(row);
+      } catch (err: any) {
+        console.warn('[SupabaseDatabase] Status history insert note:', err?.message);
+      }
+    }
+
+    return {
+      id: row.id,
+      bookingId: row.booking_id,
+      oldStatus: row.old_status,
+      newStatus: row.new_status,
+      reason: row.reason,
+      changedBy: row.changed_by,
+      createdAt: row.created_at,
+    };
+  }
+
+  static async getBookingStatusHistory(bookingId: string): Promise<BookingStatusHistory[]> {
+    const supabase = getSupabaseServerClient();
+    if (!supabase) return [];
+
+    try {
+      const { data, error } = await supabase
+        .from('booking_status_history')
+        .select('*')
+        .eq('booking_id', bookingId)
+        .order('created_at', { ascending: true });
+
+      if (error || !data) return [];
+      return data.map((d: any) => ({
+        id: d.id,
+        bookingId: d.booking_id,
+        oldStatus: d.old_status,
+        newStatus: d.new_status,
+        reason: d.reason,
+        changedBy: d.changed_by,
+        createdAt: d.created_at,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  static async recordNotification(data: {
+    userId?: string | null;
+    bookingId?: string | null;
+    type: string;
+    title: string;
+    message: string;
+  }): Promise<NotificationItem | null> {
+    const supabase = getSupabaseServerClient();
+    const id = `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const now = new Date().toISOString();
+
+    const row = {
+      id,
+      user_id: data.userId || null,
+      booking_id: data.bookingId || null,
+      type: data.type,
+      title: data.title,
+      message: data.message,
+      is_read: false,
+      created_at: now,
+    };
+
+    if (supabase) {
+      try {
+        await supabase.from('notifications').insert(row);
+      } catch (err: any) {
+        console.warn('[SupabaseDatabase] Notification insert note:', err?.message);
+      }
+    }
+
+    return {
+      id: row.id,
+      userId: row.user_id,
+      bookingId: row.booking_id,
+      type: row.type,
+      title: row.title,
+      message: row.message,
+      isRead: row.is_read,
+      createdAt: row.created_at,
+    };
+  }
+
+  static async getNotifications(userId?: string, limit = 50): Promise<NotificationItem[]> {
+    const supabase = getSupabaseServerClient();
+    if (!supabase) return [];
+
+    try {
+      let query = supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(limit);
+      if (userId) {
+        query = query.or(`user_id.eq.${userId},user_id.is.null`);
+      }
+      const { data, error } = await query;
+      if (error || !data) return [];
+      return data.map((d: any) => ({
+        id: d.id,
+        userId: d.user_id,
+        bookingId: d.booking_id,
+        type: d.type,
+        title: d.title,
+        message: d.message,
+        isRead: Boolean(d.is_read),
+        createdAt: d.created_at,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  static async getBookingItems(bookingId: string): Promise<BookingItem[]> {
+    const supabase = getSupabaseServerClient();
+    if (!supabase) return [];
+
+    try {
+      const { data, error } = await supabase
+        .from('booking_items')
+        .select('*')
+        .eq('booking_id', bookingId);
+
+      if (error || !data) return [];
+      return data.map(mapBookingItemFromDb);
+    } catch {
+      return [];
+    }
   }
 
   // ==========================================================================
