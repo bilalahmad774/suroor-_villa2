@@ -1403,6 +1403,27 @@ export const dataStore = {
     memStore.payments.push(payment);
     memStore.invoices.push(invoice);
 
+    memStore.bookingStatusHistory.push({
+      id: `bsh-${Date.now()}`,
+      bookingId: booking.id,
+      oldStatus: 'PENDING',
+      newStatus: 'CONFIRMED',
+      reason: `Payment confirmed via ${data.method} (Txn: ${data.transactionId})`,
+      changedBy: 'SYSTEM_PAYMENT',
+      createdAt: new Date().toISOString(),
+    });
+
+    memStore.notifications.push({
+      id: `notif-${Date.now()}`,
+      userId: booking.userId || null,
+      bookingId: booking.id,
+      type: 'PAYMENT_CONFIRMED',
+      title: 'Booking Confirmed & Paid',
+      message: `Payment of ₹${data.amount.toLocaleString('en-IN')} confirmed for booking ${booking.referenceCode}.`,
+      isRead: false,
+      createdAt: new Date().toISOString(),
+    });
+
     this.addAuditLog({
       userId: booking.userId || 'GUEST',
       action: 'CONFIRM_PAYMENT',
