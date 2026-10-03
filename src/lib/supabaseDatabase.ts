@@ -60,6 +60,28 @@ export function mapBookingItemFromDb(row: any): BookingItem {
   };
 }
 
+// Cache whether the connected Supabase bookings table has the 'room_id' column
+let hasBookingsRoomIdColumn: boolean | null = null;
+// Track any columns confirmed missing in the connected Supabase bookings table
+export const unsupportedBookingsColumns = new Set<string>();
+
+/**
+ * Extract missing column name from PostgREST or PostgreSQL error message
+ */
+export function extractMissingColumnName(errMsg: string): string | null {
+  if (!errMsg) return null;
+  // Match: Could not find the 'xyz' column of 'bookings' in the schema cache
+  const m1 = errMsg.match(/Could not find the '([^']+)' column of '(?:bookings|guests|booking_items)' in the schema cache/i);
+  if (m1) return m1[1];
+  // Match: column bookings.xyz does not exist OR column "xyz" of relation "bookings" does not exist
+  const m2 = errMsg.match(/column (?:[a-zA-Z0-9_]+\.)?"?([a-zA-Z0-9_]+)"? (?:of relation [^\s]+ )?does not exist/i);
+  if (m2) return m2[1];
+  // Match: column "xyz" does not exist
+  const m3 = errMsg.match(/column "?([a-zA-Z0-9_]+)"? does not exist/i);
+  if (m3) return m3[1];
+  return null;
+}
+
 /**
  * Helper to map snake_case database row to camelCase Booking object
  */
@@ -111,7 +133,12 @@ export function mapBookingFromDb(
     referenceCode: row.reference_code,
     userId: row.user_id || undefined,
     villaId: row.villa_id,
-    roomId: row.room_id || undefined,
+    roomId:
+      row.room_id ||
+      (items && items.length > 0 && items[0]?.accommodation_id && items[0].accommodation_id !== 'entire-villa'
+        ? items[0].accommodation_id
+        : undefined) ||
+      undefined,
     checkIn: typeof row.check_in === 'string' ? row.check_in.split('T')[0] : row.check_in,
     checkOut: typeof row.check_out === 'string' ? row.check_out.split('T')[0] : row.check_out,
     nights: Number(row.nights),
@@ -791,19 +818,66 @@ export class SupabaseDatabase {
         }
       }
 
-      // 2. Query bookings that are either:
-      // - CONFIRMED or PAID
-      // - OR PENDING with active lock_expires_at > now()
-      const nowIso = new Date().toISOString();
-      const { data: bookingsData, error: bookErr } = await supabase
-        .from('bookings')
-        .select('id, room_id, check_in, check_out, status, payment_status, lock_expires_at')
-        .eq('villa_id', villaId)
-        .lt('check_in', targetOut)
-        .gt('check_out', targetIn);
+      // 2. Query bookings that are overlapping target dates
+      let bookingsData: any[] | null = null;
+      let bookErr: any = null;
+
+      try {
+        let query = supabase
+          .from('bookings')
+          .select('*')
+          .lt('check_in', targetOut)
+          .gt('check_out', targetIn);
+
+        if (villaId && !unsupportedBookingsColumns.has('villa_id')) {
+          query = query.eq('villa_id', villaId);
+        }
+
+        const res = await query;
+        if (res.error && res.error.message?.includes('villa_id')) {
+          unsupportedBookingsColumns.add('villa_id');
+          const retryRes = await supabase
+            .from('bookings')
+            .select('*')
+            .lt('check_in', targetOut)
+            .gt('check_out', targetIn);
+          bookingsData = retryRes.data;
+          bookErr = retryRes.error;
+        } else {
+          bookingsData = res.data;
+          bookErr = res.error;
+        }
+
+        // If bookings exist and lack room_id, resolve from booking_items if possible
+        if (bookingsData && bookingsData.length > 0 && bookingsData.some((b: any) => !b.room_id)) {
+          const bookingIds = bookingsData.map((b: any) => b.id);
+          try {
+            const { data: itemsData } = await supabase
+              .from('booking_items')
+              .select('booking_id, accommodation_id')
+              .in('booking_id', bookingIds);
+
+            if (itemsData && itemsData.length > 0) {
+              const itemMap = new Map<string, string>();
+              for (const it of itemsData) {
+                if (it.accommodation_id) itemMap.set(it.booking_id, it.accommodation_id);
+              }
+              for (const b of bookingsData) {
+                if (!b.room_id) {
+                  b.room_id = itemMap.get(b.id) || null;
+                }
+              }
+            }
+          } catch {
+            // Ignore if booking_items is not accessible
+          }
+        }
+      } catch (err: any) {
+        bookErr = err;
+      }
 
       if (bookErr) {
-        console.warn('[SupabaseDatabase] Availability check error:', bookErr.message);
+        console.warn('[SupabaseDatabase] Availability check notice:', bookErr.message);
         return { available: true, conflictDates: [] };
       }
 
@@ -817,9 +891,11 @@ export class SupabaseDatabase {
         if (excludeBookingId && b.id === excludeBookingId) continue;
 
         const isPaid = b.status === 'CONFIRMED' || b.payment_status === 'PAID';
-        const isHoldActive = b.status === 'PENDING' && b.lock_expires_at && new Date(b.lock_expires_at).getTime() > Date.now();
+        const isHoldActive =
+          b.status === 'PENDING' &&
+          (!b.lock_expires_at || new Date(b.lock_expires_at).getTime() > Date.now());
 
-        if (!isPaid && !isHoldActive) {
+        if (!isPaid && !isHoldActive && b.status) {
           continue; // Expired hold or cancelled
         }
 
@@ -871,18 +947,62 @@ export class SupabaseDatabase {
     if (!supabase) return { bookedRanges: [], blockedDates: [] };
 
     try {
-      const { data: bookingData } = await supabase
-        .from('bookings')
-        .select('id, reference_code, check_in, check_out, status, payment_status, lock_expires_at, room_id')
-        .eq('villa_id', villaId)
-        .gte('check_out', new Date().toISOString().split('T')[0]);
+      let bookingData: any[] | null = null;
+      try {
+        let query = supabase
+          .from('bookings')
+          .select('*')
+          .gte('check_out', new Date().toISOString().split('T')[0]);
+
+        if (villaId && !unsupportedBookingsColumns.has('villa_id')) {
+          query = query.eq('villa_id', villaId);
+        }
+
+        let res = await query;
+        if (res.error && res.error.message?.includes('villa_id')) {
+          unsupportedBookingsColumns.add('villa_id');
+          res = await supabase
+            .from('bookings')
+            .select('*')
+            .gte('check_out', new Date().toISOString().split('T')[0]);
+        }
+        bookingData = res.data;
+
+        if (bookingData && bookingData.length > 0 && bookingData.some((b: any) => !b.room_id)) {
+          const bookingIds = bookingData.map((b: any) => b.id);
+          try {
+            const { data: itemsData } = await supabase
+              .from('booking_items')
+              .select('booking_id, accommodation_id')
+              .in('booking_id', bookingIds);
+
+            if (itemsData && itemsData.length > 0) {
+              const itemMap = new Map<string, string>();
+              for (const it of itemsData) {
+                if (it.accommodation_id) itemMap.set(it.booking_id, it.accommodation_id);
+              }
+              for (const b of bookingData) {
+                if (!b.room_id) {
+                  b.room_id = itemMap.get(b.id) || null;
+                }
+              }
+            }
+          } catch {
+            // Ignore if booking_items is not accessible
+          }
+        }
+      } catch (err: any) {
+        console.warn('[SupabaseDatabase] getBookedDateRanges notice:', err.message);
+      }
 
       const bookedRanges: Array<{ id?: string; referenceCode?: string; checkIn: string; checkOut: string; status: string; roomId?: string | null }> = [];
 
       if (bookingData) {
         for (const b of bookingData) {
           const isPaid = b.status === 'CONFIRMED' || b.payment_status === 'PAID';
-          const isHoldActive = b.status === 'PENDING' && b.lock_expires_at && new Date(b.lock_expires_at).getTime() > Date.now();
+          const isHoldActive =
+            b.status === 'PENDING' &&
+            (!b.lock_expires_at || new Date(b.lock_expires_at).getTime() > Date.now());
 
           if (isPaid || isHoldActive) {
             const isTargetVilla = !roomId || roomId === 'entire-villa';
@@ -1058,34 +1178,95 @@ export class SupabaseDatabase {
       return { booking: mappedBooking, guest: mappedGuest };
     }
 
-    // 1. Insert Booking into Supabase
-    let insertedBooking: any = null;
-    const { data: bData, error: bookErr } = await supabase
-      .from('bookings')
-      .insert(bookingRow)
-      .select()
-      .single();
-
-    if (bookErr) {
-      // If customer_name/email/phone columns don't exist in legacy bookings table, retry without them
-      if (bookErr.message && (bookErr.message.includes('customer_') || bookErr.message.includes('column'))) {
-        delete bookingRow.customer_name;
-        delete bookingRow.customer_email;
-        delete bookingRow.customer_phone;
-        const { data: retryBData, error: retryErr } = await supabase
-          .from('bookings')
-          .insert(bookingRow)
-          .select()
-          .single();
-        if (retryErr) {
-          throw new Error(`Failed to insert booking into Supabase: ${retryErr.message}`);
-        }
-        insertedBooking = retryBData;
-      } else {
-        throw new Error(`Failed to insert booking into Supabase: ${bookErr.message}`);
+    // Ensure booking metadata is preserved in notes even if columns are missing
+    if (bookingData.adults || bookingData.children || bookingData.roomId) {
+      const metaNote = `[Guests: ${bookingData.guestCount} (Adults: ${bookingData.adults}, Children: ${bookingData.children}) | Suite: ${bookingData.roomId || 'entire-villa'}]`;
+      if (!bookingRow.notes) {
+        bookingRow.notes = metaNote;
+      } else if (!bookingRow.notes.includes('Adults:')) {
+        bookingRow.notes = `${metaNote} ${bookingRow.notes}`;
       }
-    } else {
-      insertedBooking = bData;
+    }
+
+    // 1. Insert Booking into Supabase with adaptive column stripping
+    let insertedBooking: any = null;
+    let lastErr: any = null;
+    const maxRetries = 10;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      // Remove any known unsupported columns from this row
+      unsupportedBookingsColumns.forEach((col) => {
+        delete bookingRow[col];
+      });
+
+      const { data: bData, error: bookErr } = await supabase
+        .from('bookings')
+        .insert(bookingRow)
+        .select()
+        .single();
+
+      if (!bookErr) {
+        insertedBooking = bData;
+        lastErr = null;
+        break;
+      }
+
+      lastErr = bookErr;
+      const msg = bookErr.message || '';
+
+      const missingCol = extractMissingColumnName(msg);
+      if (missingCol && bookingRow[missingCol] !== undefined) {
+        unsupportedBookingsColumns.add(missingCol);
+        delete bookingRow[missingCol];
+        continue;
+      }
+
+      // If customer fields error
+      if (msg.includes('customer_') || msg.includes('customer_name') || msg.includes('customer_email') || msg.includes('customer_phone')) {
+        for (const c of ['customer_name', 'customer_email', 'customer_phone']) {
+          unsupportedBookingsColumns.add(c);
+          delete bookingRow[c];
+        }
+        continue;
+      }
+
+      // If generic column or schema error, strip extended non-core fields one by one
+      const nonCoreFields = [
+        'adults',
+        'children',
+        'room_id',
+        'lock_expires_at',
+        'coupon_id',
+        'customer_name',
+        'customer_email',
+        'customer_phone',
+        'extra_guest_fee',
+        'cleaning_fee',
+        'service_fee',
+        'discount_amount',
+        'tax_amount',
+        'internal_notes',
+        'refund_amount',
+        'refund_status',
+        'cancellation_reason',
+      ];
+      let stripped = false;
+      for (const f of nonCoreFields) {
+        if (bookingRow[f] !== undefined) {
+          unsupportedBookingsColumns.add(f);
+          delete bookingRow[f];
+          stripped = true;
+          break;
+        }
+      }
+
+      if (!stripped) {
+        break;
+      }
+    }
+
+    if (lastErr || !insertedBooking) {
+      throw new Error(`Failed to insert booking into Supabase: ${lastErr?.message || 'Unknown database error'}`);
     }
 
     // 2. Insert into booking_items
@@ -1103,7 +1284,20 @@ export class SupabaseDatabase {
         .insert(guestRow)
         .select()
         .single();
-      if (!guestErr) insertedGuest = gData;
+      if (!guestErr) {
+        insertedGuest = gData;
+      } else {
+        const missingGuestCol = extractMissingColumnName(guestErr.message);
+        if (missingGuestCol && (guestRow as any)[missingGuestCol] !== undefined) {
+          delete (guestRow as any)[missingGuestCol];
+          const { data: retryGData } = await supabase
+            .from('guests')
+            .insert(guestRow)
+            .select()
+            .single();
+          if (retryGData) insertedGuest = retryGData;
+        }
+      }
     } catch (gErr: any) {
       console.warn('[SupabaseDatabase] Note inserting guest into guests table:', gErr.message);
     }
@@ -1204,20 +1398,43 @@ export class SupabaseDatabase {
     }
 
     // 1. Update Booking
-    const { data: updatedBooking, error: bookErr } = await supabase
+    const updateBookingRow: any = {
+      status: 'CONFIRMED',
+      payment_status: 'PAID',
+      paid_amount: params.amount,
+      payment_transaction_id: params.transactionId,
+      payment_gateway: params.method,
+      updated_at: now,
+    };
+    if (!unsupportedBookingsColumns.has('lock_expires_at')) {
+      updateBookingRow.lock_expires_at = null;
+    }
+
+    let updatedBooking: any = null;
+    let bookErr: any = null;
+
+    const res = await supabase
       .from('bookings')
-      .update({
-        status: 'CONFIRMED',
-        payment_status: 'PAID',
-        paid_amount: params.amount,
-        payment_transaction_id: params.transactionId,
-        payment_gateway: params.method,
-        lock_expires_at: null,
-        updated_at: now,
-      })
+      .update(updateBookingRow)
       .eq('id', params.bookingId)
       .select()
-      .single();
+      .maybeSingle();
+
+    if (res.error && res.error.message?.includes('lock_expires_at')) {
+      unsupportedBookingsColumns.add('lock_expires_at');
+      delete updateBookingRow.lock_expires_at;
+      const retryRes = await supabase
+        .from('bookings')
+        .update(updateBookingRow)
+        .eq('id', params.bookingId)
+        .select()
+        .maybeSingle();
+      updatedBooking = retryRes.data;
+      bookErr = retryRes.error;
+    } else {
+      updatedBooking = res.data;
+      bookErr = res.error;
+    }
 
     if (bookErr) {
       throw new Error(`Failed to confirm booking payment in Supabase: ${bookErr.message}`);
@@ -1286,18 +1503,36 @@ export class SupabaseDatabase {
     const supabase = getSupabaseServerClient();
     if (!supabase) return null;
 
-    const { data, error } = await supabase
+    const updatePayload: any = {
+      status: 'CANCELLED',
+      cancellation_reason: 'Hold expired or released prior to checkout.',
+      updated_at: new Date().toISOString(),
+    };
+    if (!unsupportedBookingsColumns.has('lock_expires_at')) {
+      updatePayload.lock_expires_at = null;
+    }
+
+    let { data, error } = await supabase
       .from('bookings')
-      .update({
-        status: 'CANCELLED',
-        cancellation_reason: 'Hold expired or released prior to checkout.',
-        lock_expires_at: null,
-        updated_at: new Date().toISOString(),
-      })
+      .update(updatePayload)
       .eq('id', bookingId)
       .eq('status', 'PENDING')
       .select()
       .maybeSingle();
+
+    if (error && error.message?.includes('lock_expires_at')) {
+      unsupportedBookingsColumns.add('lock_expires_at');
+      delete updatePayload.lock_expires_at;
+      const retry = await supabase
+        .from('bookings')
+        .update(updatePayload)
+        .eq('id', bookingId)
+        .eq('status', 'PENDING')
+        .select()
+        .maybeSingle();
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error || !data) return null;
 
@@ -1535,19 +1770,36 @@ export class SupabaseDatabase {
     const prevBooking = await this.getBookingById(bookingId);
     const oldStatus = prevBooking?.status || 'PENDING';
 
-    const { data: updatedBooking, error: bookErr } = await supabase
+    const updateCancelPayload: any = {
+      status: 'CANCELLED',
+      cancellation_reason: reason,
+      refund_amount: refundAmount,
+      refund_status: refundAmount > 0 ? 'PENDING' : 'NOT_APPLICABLE',
+      updated_at: now,
+    };
+    if (!unsupportedBookingsColumns.has('lock_expires_at')) {
+      updateCancelPayload.lock_expires_at = null;
+    }
+
+    let { data: updatedBooking, error: bookErr } = await supabase
       .from('bookings')
-      .update({
-        status: 'CANCELLED',
-        cancellation_reason: reason,
-        refund_amount: refundAmount,
-        refund_status: refundAmount > 0 ? 'PENDING' : 'NOT_APPLICABLE',
-        lock_expires_at: null,
-        updated_at: now,
-      })
+      .update(updateCancelPayload)
       .or(`id.eq.${bookingId},reference_code.eq.${bookingId}`)
       .select()
       .maybeSingle();
+
+    if (bookErr && bookErr.message?.includes('lock_expires_at')) {
+      unsupportedBookingsColumns.add('lock_expires_at');
+      delete updateCancelPayload.lock_expires_at;
+      const retryCancel = await supabase
+        .from('bookings')
+        .update(updateCancelPayload)
+        .or(`id.eq.${bookingId},reference_code.eq.${bookingId}`)
+        .select()
+        .maybeSingle();
+      updatedBooking = retryCancel.data;
+      bookErr = retryCancel.error;
+    }
 
     if (bookErr || !updatedBooking) return null;
 

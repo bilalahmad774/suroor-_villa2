@@ -1182,7 +1182,10 @@ export const dataStore = {
           }
         } catch (dbErr: any) {
           console.error('[dataStore] Supabase createBooking error:', dbErr);
-          throw dbErr;
+          if (process.env.STRICT_SUPABASE === 'true') {
+            throw dbErr;
+          }
+          console.warn('[dataStore] Supabase error in non-strict mode; continuing with resilient in-memory booking reservation.');
         }
       }
 

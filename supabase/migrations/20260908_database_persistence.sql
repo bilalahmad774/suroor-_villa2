@@ -114,6 +114,15 @@ CREATE INDEX IF NOT EXISTS idx_bookings_ref ON public.bookings (reference_code);
 CREATE INDEX IF NOT EXISTS idx_bookings_user ON public.bookings (user_id);
 CREATE INDEX IF NOT EXISTS idx_bookings_lock ON public.bookings (lock_expires_at) WHERE status = 'PENDING';
 
+-- Ensure backward-compatible columns exist on existing deployments
+ALTER TABLE IF EXISTS public.bookings ADD COLUMN IF NOT EXISTS room_id TEXT;
+ALTER TABLE IF EXISTS public.bookings ADD COLUMN IF NOT EXISTS adults INTEGER DEFAULT 1;
+ALTER TABLE IF EXISTS public.bookings ADD COLUMN IF NOT EXISTS children INTEGER DEFAULT 0;
+ALTER TABLE IF EXISTS public.bookings ADD COLUMN IF NOT EXISTS lock_expires_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS public.bookings ADD COLUMN IF NOT EXISTS customer_name TEXT;
+ALTER TABLE IF EXISTS public.bookings ADD COLUMN IF NOT EXISTS customer_email TEXT;
+ALTER TABLE IF EXISTS public.bookings ADD COLUMN IF NOT EXISTS customer_phone TEXT;
+
 -- 6. GUESTS TABLE
 CREATE TABLE IF NOT EXISTS public.guests (
   id TEXT PRIMARY KEY,
